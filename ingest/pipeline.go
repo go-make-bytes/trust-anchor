@@ -1,0 +1,345 @@
+package ingest
+
+import (
+	"context"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"go.uber.org/zap"
+
+	"github.com/gmb-sig/trust-anchor/events"
+	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/gmb-sig/trust-anchor/tsl"
+)
+
+// Activation modes (TRUST_ACTIVATION_MODE).
+const (
+	ModeAuto = "auto"
+	ModeHold = "hold"
+)
+
+// Config parameterizes the ingestion pipeline.
+type Config struct {
+	LOTLURL          string
+	Territories      []string
+	AcceptedStatuses []string
+	ActivationMode   string
+	HoldAutoRelease  time.Duration
+	ExtraAnchorsPath string
+	OJNoticeURL      string
+	// StaleGrace is the grace period past a list's NextUpdate before its data
+	// is flagged stale (served with a warning, never dropped).
+	StaleGrace time.Duration
+}
+
+// Pipeline executes one ingestion cycle: LOTL → pivots → national TLs →
+// anchors → snapshot. It is stateless between cycles; all state lives in the
+// snapshots it is handed and returns.
+type Pipeline struct {
+	cfg     Config
+	fetcher *Fetcher
+	events  *events.Emitter
+	log     *zap.Logger
+}
+
+// NewPipeline builds a Pipeline.
+func NewPipeline(cfg Config, fetcher *Fetcher, ev *events.Emitter, log *zap.Logger) *Pipeline {
+	return &Pipeline{cfg: cfg, fetcher: fetcher, events: ev, log: log}
+}
+
+func logUint(k string, v uint64) zap.Field { return zap.Uint64(k, v) }
+func logInt(k string, v int) zap.Field    { return zap.Int(k, v) }
+
+// Refresh runs one full cycle against the previous active snapshot (nil on
+// first run) and the active bootstrap set. On total failure it returns an
+// error and the caller keeps serving prev (fail-safe). Per-territory failures
+// carry the previous territory data over instead of failing the cycle.
+func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error) {
+	now := time.Now().UTC()
+
+	lotl, signers, pivotSeq, err := p.ingestLOTL(ctx, prev, boot)
+	if err != nil {
+		return nil, err
+	}
+
+	if prev != nil && lotl.SchemeInformation.TSLSequenceNumber < prev.LOTLSequence {
+		return nil, fmt.Errorf("ingest: LOTL sequence regression: %d < %d", lotl.SchemeInformation.TSLSequenceNumber, prev.LOTLSequence)
+	}
+
+	next := &trust.Snapshot{
+		GeneratedAt:      now,
+		LOTLSequence:     lotl.SchemeInformation.TSLSequenceNumber,
+		LOTLIssueTime:    lotl.SchemeInformation.ListIssueDateTime,
+		LOTLNextUpdate:   lotl.SchemeInformation.NextUpdate.DateTime,
+		LOTLPivotSeq:     pivotSeq,
+		AdvertisedOJ:     advertisedOJReference(lotl.SchemeInformation.SchemeInformationURI.URI),
+		BootstrapOJRef:   boot.OJReference,
+		BootstrapVersion: boot.Version,
+	}
+	for _, c := range signers {
+		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
+	}
+
+	// OJ watch: detect + fetch + stage, never activate (§4.7).
+	var prevStaged *trust.PendingBootstrap
+	if prev != nil {
+		prevStaged = prev.PendingBootstrap
+	}
+	next.PendingBootstrap = p.stageBootstrapUpdate(ctx, next.AdvertisedOJ, boot, prevStaged, now)
+
+	// National trusted lists.
+	territories := append([]string(nil), p.cfg.Territories...)
+	sort.Strings(territories)
+	for _, code := range territories {
+		t, err := p.ingestTerritory(ctx, lotl, code, prev, now)
+		if err != nil {
+			return nil, err
+		}
+		next.Territories = append(next.Territories, t)
+	}
+
+	// Manual demo/test overlay (operator-controlled, pre-approved).
+	overlay, err := trust.LoadOverlay(p.cfg.ExtraAnchorsPath)
+	if err != nil {
+		return nil, fmt.Errorf("ingest: load extra anchors overlay: %w", err)
+	}
+	next.Overlay = overlay
+
+	p.applyHoldMode(prev, next, now)
+
+	next.ComputeID()
+	if prev != nil {
+		next.PrevID = prev.ID
+	}
+	next.Diff = trust.ComputeDiff(prev, next)
+
+	return next, nil
+}
+
+// ingestLOTL fetches and verifies the LOTL, processing the pivot chain when
+// the current signer set no longer verifies it directly.
+func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*tsl.TrustedList, []*x509.Certificate, uint64, error) {
+	if err := p.fetcher.AllowURL(p.cfg.LOTLURL); err != nil {
+		return nil, nil, 0, err
+	}
+	raw, err := p.fetcher.Fetch(ctx, p.cfg.LOTLURL)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("ingest: fetch LOTL: %w", err)
+	}
+
+	// Unverified pre-parse: pivot URLs only. Trust decisions follow only
+	// after signature verification.
+	pre, err := tsl.Parse(raw)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("ingest: pre-parse LOTL: %w", err)
+	}
+	refs := pivotRefs(pre.SchemeInformation.SchemeInformationURI.URI)
+	maxPivot := uint64(0)
+	if len(refs) > 0 {
+		maxPivot = refs[len(refs)-1].seq
+	}
+
+	// Signer-set precedence: normally continue from the previous snapshot's
+	// (pivot-rotated) signer set. EXCEPTION — when the operator has activated a
+	// NEWER bootstrap since that snapshot was taken (boot.Version advanced),
+	// the freshly approved OJEU set takes precedence and the pivot position
+	// resets: the bootstrap-approval path exists for disaster recovery, where
+	// the previous signers may be compromised yet still cryptographically able
+	// to verify an attacker's LOTL. Without this reset the new bootstrap would
+	// never take effect.
+	var signers []*x509.Certificate
+	var pivotSeq uint64
+	switch {
+	case prev != nil && boot.Version > prev.BootstrapVersion:
+		p.log.Info("newer approved bootstrap supersedes previous snapshot signers",
+			zap.Int("bootstrap_version", boot.Version),
+			zap.Int("previous_version", prev.BootstrapVersion),
+			zap.String("oj_reference", boot.OJReference))
+		signers, err = boot.Certificates()
+		pivotSeq = 0
+	case prev != nil && len(prev.LOTLSignersDER) > 0:
+		signers, err = prev.LOTLSigners()
+		pivotSeq = prev.LOTLPivotSeq
+	default:
+		signers, err = boot.Certificates()
+	}
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	verified, verr := tsl.Verify(raw, signers)
+	if verr == nil {
+		// The current set supersedes any unprocessed pivots — they are
+		// historical rotations that ended in this set.
+		if maxPivot > pivotSeq {
+			pivotSeq = maxPivot
+		}
+	} else {
+		// Direct verification failed — the signer set may have rotated via
+		// pivots since our last cycle. Walk the unprocessed chain.
+		p.log.Info("LOTL direct verification failed, processing pivot chain", zap.Error(verr))
+		signers, pivotSeq, err = p.walkPivots(ctx, refs, signers, pivotSeq)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("ingest: pivot chain: %w (after direct verification failed: %s)", err, verr)
+		}
+		verified, err = tsl.Verify(raw, signers)
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("ingest: LOTL verification failed after pivot processing: %w", err)
+		}
+	}
+
+	lotl, err := tsl.Parse(verified)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("ingest: parse verified LOTL: %w", err)
+	}
+	if lotl.SchemeInformation.TSLType != tsl.TSLTypeEUListOfTheLists {
+		return nil, nil, 0, fmt.Errorf("ingest: LOTL has unexpected TSLType %q", lotl.SchemeInformation.TSLType)
+	}
+	return lotl, signers, pivotSeq, nil
+}
+
+// ingestTerritory fetches, verifies and extracts one national TL. On failure
+// it carries over the previous snapshot's territory data (fail-safe); when no
+// previous data exists the whole cycle fails — a partial first snapshot must
+// never be served.
+func (p *Pipeline) ingestTerritory(ctx context.Context, lotl *tsl.TrustedList, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
+	t, err := p.fetchTerritory(ctx, lotl, code, prev, now)
+	if err == nil {
+		return t, nil
+	}
+
+	if errors.Is(err, ErrEgressBlocked) {
+		p.events.EgressBlocked(nil, code, err.Error())
+	} else {
+		p.events.RefreshFailure(nil, "territory:"+code, err.Error())
+	}
+
+	var prevT *trust.Territory
+	if prev != nil {
+		prevT = prev.Territory(code)
+	}
+	if prevT == nil {
+		return nil, fmt.Errorf("ingest: territory %s failed with no previous data to fall back on: %w", code, err)
+	}
+
+	p.log.Warn("territory refresh failed — carrying over last good data",
+		zap.String("territory", code), zap.Error(err))
+	carried := *prevT
+	carried.CarriedOver = true
+	carried.CarriedOverReason = err.Error()
+	carried.Anchors = append([]trust.Anchor(nil), prevT.Anchors...)
+	if carried.StaleAt(now, p.cfg.StaleGrace) {
+		p.events.Stale(nil, code, *carried.NextUpdate)
+	}
+	return &carried, nil
+}
+
+func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
+	ptr, err := lotl.PointerFor(code)
+	if err != nil {
+		return nil, err
+	}
+	if err := p.fetcher.AllowURL(ptr.TSLLocation); err != nil {
+		return nil, err
+	}
+	signers, err := ptr.Certificates()
+	if err != nil {
+		return nil, fmt.Errorf("pointer certs for %s: %w", code, err)
+	}
+
+	raw, err := p.fetcher.Fetch(ctx, ptr.TSLLocation)
+	if err != nil {
+		return nil, err
+	}
+	tl, err := tsl.VerifyAndParse(raw, signers)
+	if err != nil {
+		return nil, fmt.Errorf("territory %s: %w", code, err)
+	}
+
+	if tl.SchemeInformation.SchemeTerritory != code {
+		return nil, fmt.Errorf("territory %s: list declares SchemeTerritory %q", code, tl.SchemeInformation.SchemeTerritory)
+	}
+	if prev != nil {
+		if prevT := prev.Territory(code); prevT != nil && tl.SchemeInformation.TSLSequenceNumber < prevT.TLSequence {
+			return nil, fmt.Errorf("territory %s: sequence regression: %d < %d", code, tl.SchemeInformation.TSLSequenceNumber, prevT.TLSequence)
+		}
+	}
+
+	anchors, warnings, err := trust.ExtractAnchors(tl, code, p.cfg.AcceptedStatuses, now)
+	if err != nil {
+		return nil, err
+	}
+	for _, w := range warnings {
+		p.log.Warn("skipped trust service during extraction",
+			zap.String("territory", code), zap.String("tsp", w.TSPName),
+			zap.String("service", w.ServiceName), zap.String("reason", w.Reason))
+	}
+
+	t := &trust.Territory{
+		Code:       code,
+		TLSequence: tl.SchemeInformation.TSLSequenceNumber,
+		IssueTime:  tl.SchemeInformation.ListIssueDateTime,
+		NextUpdate: tl.SchemeInformation.NextUpdate.DateTime,
+		Anchors:    anchors,
+	}
+	if t.StaleAt(now, p.cfg.StaleGrace) {
+		p.events.Stale(nil, code, *t.NextUpdate)
+	}
+	return t, nil
+}
+
+// applyHoldMode implements TRUST_ACTIVATION_MODE=hold: anchor ADDITIONS move
+// to the pending set (visible in the API, excluded from bundles) until
+// approved via the admin endpoint or TRUST_HOLD_AUTO_RELEASE elapses.
+// Removals always apply immediately — a removed or suspended CA must not stay
+// trusted. Overlay anchors are operator-deployed and bypass hold.
+func (p *Pipeline) applyHoldMode(prev, next *trust.Snapshot, now time.Time) {
+	if p.cfg.ActivationMode != ModeHold {
+		return
+	}
+
+	prevActive := map[string]struct{}{}
+	prevPending := map[string]trust.PendingAnchor{}
+	if prev != nil {
+		for _, t := range prev.Territories {
+			for _, a := range t.Anchors {
+				prevActive[t.Code+"/"+a.FingerprintSHA256] = struct{}{}
+			}
+		}
+		for _, pa := range prev.Pending {
+			prevPending[pa.Anchor.Territory+"/"+pa.Anchor.FingerprintSHA256] = pa
+		}
+	}
+
+	for _, t := range next.Territories {
+		kept := t.Anchors[:0]
+		for _, a := range t.Anchors {
+			key := t.Code + "/" + a.FingerprintSHA256
+			if _, active := prevActive[key]; active || prev == nil {
+				// prev == nil: the very first snapshot is the baseline, not a
+				// flood of held additions.
+				kept = append(kept, a)
+				continue
+			}
+			if pa, held := prevPending[key]; held {
+				if p.cfg.HoldAutoRelease > 0 && now.Sub(pa.FirstSeen) >= p.cfg.HoldAutoRelease {
+					kept = append(kept, a)
+					p.events.PendingApproved(nil, a.FingerprintSHA256, "system", "auto-release")
+					continue
+				}
+				next.Pending = append(next.Pending, trust.PendingAnchor{Anchor: a, FirstSeen: pa.FirstSeen})
+				continue
+			}
+			next.Pending = append(next.Pending, trust.PendingAnchor{Anchor: a, FirstSeen: now})
+			p.events.AnchorChange(nil, trust.DiffAdded, t.Code, a.FingerprintSHA256, a.TSPName, a.ServiceName, a.Status, "held for approval", true)
+		}
+		t.Anchors = kept
+	}
+
+	sort.Slice(next.Pending, func(i, j int) bool {
+		return next.Pending[i].Anchor.FingerprintSHA256 < next.Pending[j].Anchor.FingerprintSHA256
+	})
+}

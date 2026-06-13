@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trust-anchor
+        uses: actions/checkout@v4
+        with:
+          path: trust-anchor
+
+      # Locally-replaced platform libraries (sibling checkouts; the replace
+      # directives in go.mod point at ../<module>).
+      - name: Checkout go-platform-kit
+        uses: actions/checkout@v4
+        with:
+          repository: gmb-sig/go-platform-kit
+
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      # Fixture-based tests only — live-network tests are behind the `live`
+      # build tag and are run manually (see README, fixture refresh runbook).
+      - name: Test (race)
+        run: go test -race -count=1 ./...

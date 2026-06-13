@@ -1,0 +1,161 @@
+package trustanchor
+
+import (
+	"strings"
+	"time"
+
+	azugocfg "azugo.io/azugo/config"
+	"azugo.io/core/validation"
+	"github.com/spf13/viper"
+
+	"github.com/gmb-sig/go-authbyte/authclient"
+	pkconfig "github.com/gmb-sig/go-platform-kit/config"
+)
+
+// Snapshot store backends.
+const (
+	StoreBackendS3     = "s3"
+	StoreBackendFS     = "fs"
+	StoreBackendMemory = "memory"
+)
+
+// Configuration is the trust-anchor service configuration (task §7).
+type Configuration struct {
+	*pkconfig.BaseConfiguration `mapstructure:",squash"`
+
+	// Auth is the go-authbyte inbound DPoP validation config
+	// (AUTH_ISSUER_URL / SERVICE_AUDIENCE=svc:trust-anchor / …).
+	Auth *authclient.Configuration `mapstructure:"auth"`
+
+	// LOTLURL is the EU List of Trusted Lists location.
+	LOTLURL string `mapstructure:"lotl_url" validate:"required,url"`
+	// BootstrapCertsPath seeds the OJEU-published LOTL signer certificates at
+	// first install (PEM file or dir). Afterwards the approved store is
+	// authoritative and this path is ignored.
+	BootstrapCertsPath string `mapstructure:"lotl_bootstrap_certs_path"`
+	// OJPinnedReference is the OJ notice the pinned certs came from
+	// (e.g. "C/2026/1944").
+	OJPinnedReference string `mapstructure:"oj_pinned_reference"`
+	// OJNoticeURL optionally overrides the CELLAR/ELI URL for the OJ watch.
+	OJNoticeURL string `mapstructure:"oj_notice_url" validate:"omitempty,url"`
+
+	// TerritoriesRaw is the comma-separated territory list (e.g. "LV,EE").
+	TerritoriesRaw string `mapstructure:"trust_territories" validate:"required"`
+	// AcceptedStatusesRaw is the comma-separated accepted service statuses
+	// (names or full URIs; default granted).
+	AcceptedStatusesRaw string `mapstructure:"trust_accepted_statuses" validate:"required"`
+
+	RefreshInterval time.Duration `mapstructure:"trust_refresh_interval" validate:"required,gt=0"`
+	ActivationMode  string        `mapstructure:"trust_activation_mode" validate:"required,oneof=auto hold"`
+	HoldAutoRelease time.Duration `mapstructure:"trust_hold_auto_release" validate:"gte=0"`
+	StaleGrace      time.Duration `mapstructure:"trust_stale_grace" validate:"gte=0"`
+
+	// ExtraAnchorsPath is the optional demo/test manual overlay (PEM file or
+	// dir). Production deployments leave it empty.
+	ExtraAnchorsPath string `mapstructure:"trust_extra_anchors_path"`
+
+	// Snapshot store (platform standard: S3 API). Backend is derived: bucket
+	// set → s3, dir set → fs, neither → memory (development only).
+	SnapshotBucket    string `mapstructure:"trust_snapshot_bucket"`
+	SnapshotEndpoint  string `mapstructure:"trust_snapshot_endpoint" validate:"required_with=SnapshotBucket"`
+	SnapshotAccessKey string `mapstructure:"trust_snapshot_access_key"`
+	SnapshotSecretKey string `mapstructure:"trust_snapshot_secret_key"`
+	SnapshotPrefix    string `mapstructure:"trust_snapshot_prefix"`
+	SnapshotUseSSL    bool   `mapstructure:"trust_snapshot_use_ssl"`
+	SnapshotDir       string `mapstructure:"trust_snapshot_dir"`
+
+	FetchTimeout time.Duration `mapstructure:"trust_fetch_timeout" validate:"required,gt=0"`
+	MaxTLBytes   int64         `mapstructure:"max_tl_bytes" validate:"required,gt=0"`
+}
+
+// NewConfiguration returns the configuration skeleton for binding.
+func NewConfiguration() *Configuration {
+	return &Configuration{BaseConfiguration: pkconfig.New()}
+}
+
+// ServerCore returns the embedded azugo configuration.
+func (c *Configuration) ServerCore() *azugocfg.Configuration {
+	return c.BaseConfiguration.Configuration
+}
+
+// Bind registers defaults and environment bindings.
+func (c *Configuration) Bind(_ string, v *viper.Viper) {
+	c.BaseConfiguration.Bind("", v)
+	c.Auth = azugocfg.Bind(c.Auth, "auth", v)
+
+	v.SetDefault("lotl_url", "https://ec.europa.eu/tools/lotl/eu-lotl.xml")
+	v.SetDefault("trust_territories", "LV,EE")
+	v.SetDefault("trust_accepted_statuses", "granted")
+	v.SetDefault("trust_refresh_interval", 6*time.Hour)
+	v.SetDefault("trust_activation_mode", "auto")
+	v.SetDefault("trust_hold_auto_release", 72*time.Hour)
+	v.SetDefault("trust_stale_grace", 24*time.Hour)
+	v.SetDefault("trust_fetch_timeout", 30*time.Second)
+	v.SetDefault("max_tl_bytes", int64(20*1024*1024))
+	v.SetDefault("trust_snapshot_use_ssl", true)
+
+	_ = v.BindEnv("lotl_url", "LOTL_URL")
+	_ = v.BindEnv("lotl_bootstrap_certs_path", "LOTL_BOOTSTRAP_CERTS_PATH")
+	_ = v.BindEnv("oj_pinned_reference", "OJ_PINNED_REFERENCE")
+	_ = v.BindEnv("oj_notice_url", "OJ_NOTICE_URL")
+	_ = v.BindEnv("trust_territories", "TRUST_TERRITORIES")
+	_ = v.BindEnv("trust_accepted_statuses", "TRUST_ACCEPTED_STATUSES")
+	_ = v.BindEnv("trust_refresh_interval", "TRUST_REFRESH_INTERVAL")
+	_ = v.BindEnv("trust_activation_mode", "TRUST_ACTIVATION_MODE")
+	_ = v.BindEnv("trust_hold_auto_release", "TRUST_HOLD_AUTO_RELEASE")
+	_ = v.BindEnv("trust_stale_grace", "TRUST_STALE_GRACE")
+	_ = v.BindEnv("trust_extra_anchors_path", "TRUST_EXTRA_ANCHORS_PATH")
+	_ = v.BindEnv("trust_snapshot_bucket", "TRUST_SNAPSHOT_BUCKET")
+	_ = v.BindEnv("trust_snapshot_endpoint", "TRUST_SNAPSHOT_ENDPOINT")
+	_ = v.BindEnv("trust_snapshot_access_key", "TRUST_SNAPSHOT_ACCESS_KEY")
+	_ = v.BindEnv("trust_snapshot_secret_key", "TRUST_SNAPSHOT_SECRET_KEY")
+	_ = v.BindEnv("trust_snapshot_prefix", "TRUST_SNAPSHOT_PREFIX")
+	_ = v.BindEnv("trust_snapshot_use_ssl", "TRUST_SNAPSHOT_USE_SSL")
+	_ = v.BindEnv("trust_snapshot_dir", "TRUST_SNAPSHOT_DIR")
+	_ = v.BindEnv("trust_fetch_timeout", "TRUST_FETCH_TIMEOUT")
+	_ = v.BindEnv("max_tl_bytes", "MAX_TL_BYTES")
+}
+
+// Validate validates the configuration.
+func (c *Configuration) Validate(valid *validation.Validate) error {
+	if err := c.BaseConfiguration.Validate(valid); err != nil {
+		return err
+	}
+	if err := valid.Struct(c); err != nil {
+		return err
+	}
+	return c.Auth.Validate(valid)
+}
+
+// Territories returns the parsed territory codes.
+func (c *Configuration) Territories() []string {
+	return splitTrim(c.TerritoriesRaw)
+}
+
+// AcceptedStatuses returns the parsed accepted service statuses.
+func (c *Configuration) AcceptedStatuses() []string {
+	return splitTrim(c.AcceptedStatusesRaw)
+}
+
+// StoreBackend derives the snapshot-store backend from configuration.
+func (c *Configuration) StoreBackend() string {
+	switch {
+	case c.SnapshotBucket != "":
+		return StoreBackendS3
+	case c.SnapshotDir != "":
+		return StoreBackendFS
+	default:
+		return StoreBackendMemory
+	}
+}
+
+func splitTrim(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
