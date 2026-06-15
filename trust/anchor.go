@@ -87,6 +87,15 @@ type Territory struct {
 	IssueTime  time.Time  `json:"issueTime"`
 	NextUpdate *time.Time `json:"nextUpdate,omitempty"`
 
+	// SourceDigest is the SHA-256 hex of the upstream TL bytes at the last
+	// successful fetch (equals the published sibling ".sha2"). Used for
+	// input-side change detection (spec P2): a refresh cycle skips re-downloading
+	// + re-verifying this TL when the freshly fetched ".sha2" still matches and
+	// the list is within NextUpdate. Deliberately excluded from the snapshot
+	// ID/ETag projection (ComputeID) so a bytes-only re-publish keeps the ETag
+	// stable.
+	SourceDigest string `json:"sourceDigest,omitempty"`
+
 	// CarriedOver marks fail-safe reuse: this territory's data could not be
 	// refreshed and was carried over from the previous snapshot.
 	CarriedOver       bool   `json:"carriedOver,omitempty"`

@@ -2,7 +2,9 @@ package ingest
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -52,6 +54,14 @@ func NewPipeline(cfg Config, fetcher *Fetcher, ev *events.Emitter, log *zap.Logg
 
 func logUint(k string, v uint64) zap.Field { return zap.Uint64(k, v) }
 func logInt(k string, v int) zap.Field    { return zap.Int(k, v) }
+
+// sha256hex is the lowercase hex SHA-256 of b — the value a TL publisher serves
+// in the sibling ".sha2" (confirmed equal). Stored per territory for P2 change
+// detection.
+func sha256hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // Refresh runs one full cycle against the previous active snapshot (nil on
 // first run) and the active bootstrap set. On total failure it returns an
@@ -245,6 +255,28 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 	if err := p.fetcher.AllowURL(ptr.TSLLocation); err != nil {
 		return nil, err
 	}
+
+	// P2 input-side change detection: when the sibling ".sha2" matches the digest
+	// stored last cycle and the territory is still within NextUpdate, reuse the
+	// previous (already-verified) data without re-downloading + re-verifying the
+	// full TL. The ".sha2" only decides whether to fetch — trust still comes from
+	// the XMLDSig verification below on anything we do download. A list past
+	// NextUpdate, with no stored digest, with no NextUpdate, or whose digest
+	// fetch fails always falls through to a full fetch (anti-freeze).
+	if prev != nil {
+		if prevT := prev.Territory(code); prevT != nil && prevT.SourceDigest != "" &&
+			prevT.NextUpdate != nil && !prevT.StaleAt(now, p.cfg.StaleGrace) {
+			if digest, derr := p.fetcher.FetchDigest(ctx, ptr.TSLLocation); derr == nil && digest == prevT.SourceDigest {
+				reused := *prevT
+				reused.CarriedOver = false // confirmed unchanged, not a fail-safe carry-over
+				reused.Anchors = append([]trust.Anchor(nil), prevT.Anchors...)
+				p.log.Debug("territory unchanged (.sha2 match) — skipped full fetch",
+					zap.String("territory", code), zap.String("digest", digest))
+				return &reused, nil
+			}
+		}
+	}
+
 	signers, err := ptr.Certificates()
 	if err != nil {
 		return nil, fmt.Errorf("pointer certs for %s: %w", code, err)
@@ -279,11 +311,12 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 	}
 
 	t := &trust.Territory{
-		Code:       code,
-		TLSequence: tl.SchemeInformation.TSLSequenceNumber,
-		IssueTime:  tl.SchemeInformation.ListIssueDateTime,
-		NextUpdate: tl.SchemeInformation.NextUpdate.DateTime,
-		Anchors:    anchors,
+		Code:         code,
+		TLSequence:   tl.SchemeInformation.TSLSequenceNumber,
+		IssueTime:    tl.SchemeInformation.ListIssueDateTime,
+		NextUpdate:   tl.SchemeInformation.NextUpdate.DateTime,
+		SourceDigest: sha256hex(raw), // == published .sha2; drives next cycle's skip (P2)
+		Anchors:      anchors,
 	}
 	if t.StaleAt(now, p.cfg.StaleGrace) {
 		p.events.Stale(nil, code, *t.NextUpdate)

@@ -127,3 +127,29 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	return body, nil
 }
+
+// digestURL derives the sibling checksum URL for a trusted-list URL: the same
+// base path with the extension replaced by ".sha2" (the EU scheme convention —
+// both the LOTL and the national TLs publish one, e.g. latvian-tsl.xml →
+// latvian-tsl.sha2). Falls back to appending ".sha2" when there is no extension.
+func digestURL(listURL string) string {
+	if i := strings.LastIndex(listURL, "."); i > strings.LastIndex(listURL, "/") {
+		return listURL[:i] + ".sha2"
+	}
+	return listURL + ".sha2"
+}
+
+// FetchDigest fetches the sibling ".sha2" for a trusted-list URL and returns its
+// trimmed lowercase hex value (the SHA-256 of the list bytes, confirmed equal to
+// the published checksum). It is an input-side change-detection signal only
+// (spec P2): the caller still XMLDSig-verifies anything it downloads. Any error
+// (including a 404 when no sibling digest is published) is returned so the caller
+// falls back to a full fetch. The list's host must already be allow-listed
+// (AllowURL on the list URL also covers its same-host ".sha2").
+func (f *Fetcher) FetchDigest(ctx context.Context, listURL string) (string, error) {
+	body, err := f.Fetch(ctx, digestURL(listURL))
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(strings.TrimSpace(string(body))), nil
+}
