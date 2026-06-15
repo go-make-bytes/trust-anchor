@@ -14,26 +14,44 @@ file contract). Later: go-csc validation, Audit & Evidence, preservation.
 
 ## Architecture
 
-```
-                 ┌────────────────────────────────────────────────┐
-                 │                trust-anchor                    │
-   EU LOTL ────▶ │ ingest.Pipeline                                │
-   (pivots)      │   fetch (https allow-list, 20MB cap, timeout)  │
-   LV TL  ─────▶ │   verify XMLDSig vs pinned signers (tsl pkg)   │
-   EE TL  ─────▶ │   extract CA/QC anchors + qualifications       │
-                 │   snapshot (content hash) + diff + governance  │
-   OJ notice ──▶ │   OJ watch → staged bootstrap (never auto)     │
-   (CELLAR)      ├────────────────────────────────────────────────┤
-                 │ ingest.Manager   active snapshot (atomic swap) │
-                 │ store.Store      S3 versioned history + latest │
-                 │ tasks.Refresh    every 6h / NextUpdate / kick  │
-                 │ events           go-sec-events → SIEM          │
-                 ├────────────────────────────────────────────────┤
-                 │ API (azugo + go-authbyte DPoP, svc:trust-anchor)│
-                 └────────────────────────────────────────────────┘
-                        │ GET /v1/anchors (PEM, ETag)  ▲ admin
-                        ▼                              │
-                  webeid-service init/poll      ops (trust:admin)
+```mermaid
+flowchart TB
+    subgraph UP["Upstream — https-only, TLS-verified, size-capped"]
+        LOTL["EU LOTL + pivots"]
+        LV["LV trusted list (TS 119 612)"]
+        EE["EE trusted list (TS 119 612)"]
+        OJ["OJ notice (CELLAR / ELI)"]
+    end
+
+    subgraph TA["trust-anchor service"]
+        direction TB
+        FETCH["ingest.Pipeline · fetch (allow-list, 20MB, timeout)"]
+        VERIFY["verify XMLDSig vs pinned signers (tsl)"]
+        EXTRACT["extract CA/QC anchors + qualifications"]
+        SNAP["snapshot (content hash) + diff + governance"]
+        OJWATCH["OJ watch → staged bootstrap (never auto)"]
+        MGR["ingest.Manager · active snapshot (atomic swap)"]
+        STORE[("store.Store · S3 / FS / memory / Postgres — versioned + latest")]
+        REFRESH["tasks.Refresh · every 6h / NextUpdate / kick"]
+        EVENTS["events · go-sec-events"]
+        API["API · azugo + go-authbyte DPoP (svc:trust-anchor)"]
+
+        FETCH --> VERIFY --> EXTRACT --> SNAP --> MGR
+        OJWATCH --> SNAP
+        MGR <--> STORE
+        REFRESH -. kick .-> FETCH
+        SNAP --> EVENTS
+        MGR --> API
+    end
+
+    LOTL --> FETCH
+    LV --> FETCH
+    EE --> FETCH
+    OJ --> OJWATCH
+
+    API -->|"GET /v1/anchors (PEM, ETag) · 304 on If-None-Match"| WEBEID["webeid-service (init / poll)"]
+    OPS["ops (trust:admin)"] -->|"approve bootstrap / pending · refresh"| API
+    EVENTS --> SIEM[["SIEM"]]
 ```
 
 **Trust model.** Trusted-list signatures are verified against *pinned*
@@ -44,10 +62,16 @@ pointer. Only signature-verified bytes are ever parsed for trust decisions.
 The one unacceptable failure mode is serving unverified anchors; serving
 slightly old data is fine (fail-safe: last good snapshot + security event).
 
+Store backends (`store.Store`): **S3** (platform default), **fs**/**memory**
+(dev/test), and **postgres** (dual-mode scaled / multi-DC — set
+`TRUST_STORE_DSN`; the `trust_anchor` schema reached via SECURITY DEFINER
+procedures, migration in `authbyte-db/trust-anchor/`; see DECISIONS D3/D15 and
+`TRUST-INFRASTRUCTURE-EVOLUTION-SPEC.md`).
+
 Package map: [`tsl/`](tsl) TS 119 612 parsing + XMLDSig verification ·
 [`trust/`](trust) domain (anchors, snapshots, diff, filters, overlay) ·
 [`ingest/`](ingest) fetcher/pipeline/pivots/OJ-watch/manager ·
-[`store/`](store) S3 / fs / memory snapshot stores · [`tasks/`](tasks)
+[`store/`](store) S3 / fs / memory / postgres snapshot stores · [`tasks/`](tasks)
 refresh job · [`routes/`](routes) API. XMLDSig verification uses
 `lafriks/go-xmldsig/v2`. Key design notes in [DECISIONS.md](DECISIONS.md) —
 read D1 (XMLDSig adaptations) and D2 (pivot algorithm) before touching
@@ -118,6 +142,7 @@ and arrive in the same bundle tagged `source: manual-overlay`.
 | `TRUST_EXTRA_ANCHORS_PATH` | — | demo/test overlay (PEM file/dir); empty in production |
 | `TRUST_SNAPSHOT_BUCKET/ENDPOINT/ACCESS_KEY/SECRET_KEY/PREFIX/USE_SSL` | — | S3-API snapshot store (platform standard) |
 | `TRUST_SNAPSHOT_DIR` | — | filesystem store (development) |
+| `TRUST_STORE_DSN` | — | **PostgreSQL backend** — the dual-mode scaled / multi-DC store (spec P1b): the `trust_anchor` schema reached via `SECURITY DEFINER` procedures. **Takes precedence** over S3/FS/memory when set. Schema migration in `authbyte-db/trust-anchor/`; connect as the EXECUTE-only `trust_anchor_svc` role and source the DSN from Vault (it carries a password). |
 | `TRUST_FETCH_TIMEOUT` / `MAX_TL_BYTES` | `30s` / `20MiB` | fetch guards |
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` | — / `svc:trust-anchor` | go-authbyte inbound validation (plus standard `DPOP_*` vars) |
 

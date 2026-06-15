@@ -14,9 +14,10 @@ import (
 
 // Snapshot store backends.
 const (
-	StoreBackendS3     = "s3"
-	StoreBackendFS     = "fs"
-	StoreBackendMemory = "memory"
+	StoreBackendPostgres = "postgres"
+	StoreBackendS3       = "s3"
+	StoreBackendFS       = "fs"
+	StoreBackendMemory   = "memory"
 )
 
 // Configuration is the trust-anchor service configuration (task §7).
@@ -63,6 +64,13 @@ type Configuration struct {
 	SnapshotPrefix    string `mapstructure:"trust_snapshot_prefix"`
 	SnapshotUseSSL    bool   `mapstructure:"trust_snapshot_use_ssl"`
 	SnapshotDir       string `mapstructure:"trust_snapshot_dir"`
+
+	// StoreDSN selects and configures the PostgreSQL backend — the dual-mode
+	// scaled / multi-DC store (spec P1b), the `trust_anchor` schema reached via
+	// SECURITY DEFINER procedures. When set it takes precedence over the
+	// S3/FS/memory selection. Points at the EXECUTE-only `trust_anchor_svc`
+	// role; source it from Vault in production (it carries a password).
+	StoreDSN string `mapstructure:"trust_store_dsn"`
 
 	FetchTimeout time.Duration `mapstructure:"trust_fetch_timeout" validate:"required,gt=0"`
 	MaxTLBytes   int64         `mapstructure:"max_tl_bytes" validate:"required,gt=0"`
@@ -112,6 +120,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("trust_snapshot_prefix", "TRUST_SNAPSHOT_PREFIX")
 	_ = v.BindEnv("trust_snapshot_use_ssl", "TRUST_SNAPSHOT_USE_SSL")
 	_ = v.BindEnv("trust_snapshot_dir", "TRUST_SNAPSHOT_DIR")
+	_ = v.BindEnv("trust_store_dsn", "TRUST_STORE_DSN")
 	_ = v.BindEnv("trust_fetch_timeout", "TRUST_FETCH_TIMEOUT")
 	_ = v.BindEnv("max_tl_bytes", "MAX_TL_BYTES")
 }
@@ -140,6 +149,8 @@ func (c *Configuration) AcceptedStatuses() []string {
 // StoreBackend derives the snapshot-store backend from configuration.
 func (c *Configuration) StoreBackend() string {
 	switch {
+	case c.StoreDSN != "":
+		return StoreBackendPostgres
 	case c.SnapshotBucket != "":
 		return StoreBackendS3
 	case c.SnapshotDir != "":

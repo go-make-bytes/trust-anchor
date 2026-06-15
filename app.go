@@ -70,6 +70,11 @@ func (a *App) init() error {
 
 	var err error
 	switch cfg.StoreBackend() {
+	case StoreBackendPostgres:
+		a.store, err = store.NewPostgres(a.BackgroundContext(), cfg.StoreDSN)
+		if err != nil {
+			return err
+		}
 	case StoreBackendS3:
 		a.store, err = store.NewS3(store.S3Options{
 			Endpoint:  cfg.SnapshotEndpoint,
