@@ -38,6 +38,57 @@ func cellarURL(ojRef string) string {
 	return "https://publications.europa.eu/resource/eli/" + ojRef + "/oj"
 }
 
+// FetchFirstBootstrap fetches the OJ notice named by ojRef from the EU CELLAR
+// API (and the OJNoticeURL override when set), extracts the LOTL signer
+// certificates, and returns a candidate first-install bootstrap (version 1).
+// It does NOT persist or activate anything — Manager.Initialize decides
+// activation. The returned bool echoes the configured BootstrapAutoApprove so
+// the Manager need not reach into the pipeline config. Implements the
+// ojBootstrapSeeder interface consulted by Manager.Initialize at first install.
+func (p *Pipeline) FetchFirstBootstrap(ctx context.Context, ojRef string, now time.Time) (*trust.Bootstrap, bool, error) {
+	urls := []string{cellarURL(ojRef)}
+	if p.cfg.OJNoticeURL != "" {
+		urls = append([]string{p.cfg.OJNoticeURL}, urls...)
+	}
+
+	var certs []*x509.Certificate
+	var fetchErr error
+	for _, u := range urls {
+		if err := p.fetcher.AllowURL(u); err != nil {
+			fetchErr = err
+			continue
+		}
+		raw, err := p.fetcher.Fetch(ctx, u)
+		if err != nil {
+			fetchErr = err
+			continue
+		}
+		certs = extractCertificates(raw)
+		if len(certs) > 0 {
+			break
+		}
+		fetchErr = fmt.Errorf("no certificates found in OJ notice at %s", u)
+	}
+	if len(certs) == 0 {
+		if fetchErr == nil {
+			fetchErr = fmt.Errorf("no OJ notice source available for %s", ojRef)
+		}
+		return nil, p.cfg.BootstrapAutoApprove, fmt.Errorf("fetch OJ bootstrap %s: %w", ojRef, fetchErr)
+	}
+
+	boot := &trust.Bootstrap{Version: 1, OJReference: ojRef, ActivatedAt: now, Seeded: true}
+	seen := map[string]struct{}{}
+	for _, c := range certs {
+		fp := trust.Fingerprint(c)
+		if _, dup := seen[fp]; dup {
+			continue
+		}
+		seen[fp] = struct{}{}
+		boot.CertsDER = append(boot.CertsDER, c.Raw)
+	}
+	return boot, p.cfg.BootstrapAutoApprove, nil
+}
+
 // stageBootstrapUpdate handles the OJ watch (task §4.7): when the LOTL
 // advertises an OJ reference different from the active bootstrap's, it
 // fetches the notice (best-effort — failures are treated as "no change"),

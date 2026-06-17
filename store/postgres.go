@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gmb-sig/trust-anchor/trust"
@@ -59,6 +61,18 @@ func (p *Postgres) call(ctx context.Context, proc string, in any) (json.RawMessa
 
 	var out []byte
 	if err := p.pool.QueryRow(ctx, q, inJSON).Scan(&out); err != nil {
+		// A procedure that fails after a write re-raises a structured error with
+		// SQLSTATE P0001 (Pattern B) to force a rollback; its message is the
+		// util.result_error JSON. Recover the code/message so callers see the
+		// same shape as the validation (returned-error) path.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "P0001" {
+			var env envelope
+			if json.Unmarshal([]byte(pgErr.Message), &env) == nil && env.Result == "error" {
+				return nil, fmt.Errorf("store: %s: %s: %s", proc, env.Code, env.Message)
+			}
+		}
+
 		return nil, fmt.Errorf("store: %s: %w", proc, err)
 	}
 

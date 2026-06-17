@@ -23,6 +23,16 @@ type Refresher interface {
 	Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error)
 }
 
+// ojBootstrapSeeder is optionally implemented by the pipeline (*Pipeline does):
+// it fetches the first-install bootstrap certificates from the EU OJ/CELLAR API
+// for a pinned OJ reference, returning the candidate bootstrap and the
+// configured auto-approve flag. Manager.Initialize consults it (via type
+// assertion) only when the store has no bootstrap and no cert path is pinned, so
+// test fakes that implement just Refresher are unaffected.
+type ojBootstrapSeeder interface {
+	FetchFirstBootstrap(ctx context.Context, ojRef string, now time.Time) (*trust.Bootstrap, bool, error)
+}
+
 // Manager owns the active snapshot and bootstrap state: startup bootstrap
 // from the store, refresh cycles (fail-safe: a failed cycle never replaces
 // the last good snapshot), hold-mode approvals and bootstrap activation.
@@ -62,19 +72,44 @@ func (m *Manager) Initialize(ctx context.Context, seedPath, seedOJRef string) er
 		return fmt.Errorf("ingest: load bootstrap from store: %w", err)
 	}
 	if boot == nil {
-		if seedPath == "" {
-			return fmt.Errorf("ingest: no bootstrap in store and LOTL_BOOTSTRAP_CERTS_PATH not configured — the OJEU bootstrap certificates are required at first install")
-		}
-		boot, err = trust.SeedBootstrap(seedPath, seedOJRef, time.Now().UTC())
-		if err != nil {
-			return err
+		switch {
+		case seedPath != "":
+			// Operator-pinned cert bytes (strongest): seed from the PEM/DER path.
+			boot, err = trust.SeedBootstrap(seedPath, seedOJRef, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			m.log.Info("seeded OJEU bootstrap from pinned certs (LOTL_BOOTSTRAP_CERTS_PATH)",
+				zap.String("oj_reference", boot.OJReference),
+				zap.Strings("fingerprints", boot.Fingerprints()))
+		case seedOJRef != "":
+			// Fetch the pinned OJ notice from the EU CELLAR API (the designed path).
+			seeder, ok := m.pipeline.(ojBootstrapSeeder)
+			if !ok {
+				return fmt.Errorf("ingest: OJ bootstrap fetch is not supported by the configured pipeline")
+			}
+			fetched, autoApprove, ferr := seeder.FetchFirstBootstrap(ctx, seedOJRef, time.Now().UTC())
+			if ferr != nil {
+				return fmt.Errorf("ingest: fetch first bootstrap from OJ API: %w", ferr)
+			}
+			if !autoApprove {
+				// Operator-gated: surface the fingerprints for out-of-band review,
+				// then fail closed — nothing is persisted or trusted.
+				m.log.Warn("fetched OJEU bootstrap from the EU API — NOT activated (operator approval required)",
+					zap.String("oj_reference", fetched.OJReference),
+					zap.Strings("fingerprints", fetched.Fingerprints()))
+				return fmt.Errorf("ingest: fetched OJEU bootstrap %s from the EU API but TRUST_BOOTSTRAP_AUTO_APPROVE is false — review the logged fingerprints against the OJ notice, then set TRUST_BOOTSTRAP_AUTO_APPROVE=true (or pin the certs via LOTL_BOOTSTRAP_CERTS_PATH) to activate", fetched.OJReference)
+			}
+			boot = fetched
+			m.log.Info("fetched and auto-approved OJEU bootstrap from the EU API",
+				zap.String("oj_reference", boot.OJReference),
+				zap.Strings("fingerprints", boot.Fingerprints()))
+		default:
+			return fmt.Errorf("ingest: no bootstrap in store and neither LOTL_BOOTSTRAP_CERTS_PATH nor OJ_PINNED_REFERENCE configured — one is required at first install")
 		}
 		if err := m.store.SaveBootstrap(ctx, boot); err != nil {
 			return fmt.Errorf("ingest: persist seeded bootstrap: %w", err)
 		}
-		m.log.Info("seeded OJEU bootstrap certificates",
-			zap.String("oj_reference", boot.OJReference),
-			zap.Strings("fingerprints", boot.Fingerprints()))
 	}
 	m.bootstrap.Store(boot)
 

@@ -40,6 +40,15 @@ type Configuration struct {
 	// OJNoticeURL optionally overrides the CELLAR/ELI URL for the OJ watch.
 	OJNoticeURL string `mapstructure:"oj_notice_url" validate:"omitempty,url"`
 
+	// BootstrapAutoApprove controls first-install bootstrapping when the store
+	// has no bootstrap and no LOTL_BOOTSTRAP_CERTS_PATH is pinned: the engine
+	// fetches the OJ notice named by OJPinnedReference from the EU CELLAR API.
+	// When true the fetched certificates are activated immediately (dev/CI);
+	// when false (default) they are fetched and their fingerprints logged, but
+	// activation fails closed pending operator review (set this true, or pin the
+	// certs via LOTL_BOOTSTRAP_CERTS_PATH, to activate).
+	BootstrapAutoApprove bool `mapstructure:"trust_bootstrap_auto_approve"`
+
 	// TerritoriesRaw is the comma-separated territory list (e.g. "LV,EE").
 	TerritoriesRaw string `mapstructure:"trust_territories" validate:"required"`
 	// AcceptedStatusesRaw is the comma-separated accepted service statuses
@@ -68,7 +77,7 @@ type Configuration struct {
 	// StoreDSN selects and configures the PostgreSQL backend — the dual-mode
 	// scaled / multi-DC store (spec P1b), the `trust_anchor` schema reached via
 	// SECURITY DEFINER procedures. When set it takes precedence over the
-	// S3/FS/memory selection. Points at the EXECUTE-only `trust_anchor_svc`
+	// S3/FS/memory selection. Points at the EXECUTE-only `trust_anchor_public`
 	// role; source it from Vault in production (it carries a password).
 	StoreDSN string `mapstructure:"trust_store_dsn"`
 
@@ -106,6 +115,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("lotl_bootstrap_certs_path", "LOTL_BOOTSTRAP_CERTS_PATH")
 	_ = v.BindEnv("oj_pinned_reference", "OJ_PINNED_REFERENCE")
 	_ = v.BindEnv("oj_notice_url", "OJ_NOTICE_URL")
+	_ = v.BindEnv("trust_bootstrap_auto_approve", "TRUST_BOOTSTRAP_AUTO_APPROVE")
 	_ = v.BindEnv("trust_territories", "TRUST_TERRITORIES")
 	_ = v.BindEnv("trust_accepted_statuses", "TRUST_ACCEPTED_STATUSES")
 	_ = v.BindEnv("trust_refresh_interval", "TRUST_REFRESH_INTERVAL")

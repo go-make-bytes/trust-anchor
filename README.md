@@ -130,9 +130,10 @@ and arrive in the same bundle tagged `source: manual-overlay`.
 | Env | Default | Purpose |
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists |
-| `LOTL_BOOTSTRAP_CERTS_PATH` | — | OJEU-published LOTL signer certs (PEM file/dir). **First-install seed only**; afterwards the approved store is authoritative |
-| `OJ_PINNED_REFERENCE` | — | OJ notice the seed came from, e.g. `C/2026/1944` |
-| `OJ_NOTICE_URL` | — | optional CELLAR/ELI URL override for the OJ watch |
+| `LOTL_BOOTSTRAP_CERTS_PATH` | — | OJEU-published LOTL signer certs (PEM file/dir) — operator-pinned **first-install seed** (highest precedence); afterwards the approved store is authoritative |
+| `OJ_PINNED_REFERENCE` | — | OJ notice to trust, e.g. `C/2026/1944`. Used as the seed's reference, **and** (when no cert path is pinned) as the notice fetched from the EU CELLAR API at first install |
+| `OJ_NOTICE_URL` | — | optional CELLAR/ELI URL override for the OJ-API fetch (watch + first-install) |
+| `TRUST_BOOTSTRAP_AUTO_APPROVE` | `false` | first-install only: when no cert path is pinned, fetch `OJ_PINNED_REFERENCE` from the EU CELLAR API and — if `true` — activate it immediately (dev/CI). `false` fetches, logs the fingerprints, and fails closed pending operator review |
 | `TRUST_TERRITORIES` | `LV,EE` | national lists to ingest |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | accepted service statuses (names or full URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | refresh cadence (earliest TL `NextUpdate` is honored too) |
@@ -142,7 +143,7 @@ and arrive in the same bundle tagged `source: manual-overlay`.
 | `TRUST_EXTRA_ANCHORS_PATH` | — | demo/test overlay (PEM file/dir); empty in production |
 | `TRUST_SNAPSHOT_BUCKET/ENDPOINT/ACCESS_KEY/SECRET_KEY/PREFIX/USE_SSL` | — | S3-API snapshot store (platform standard) |
 | `TRUST_SNAPSHOT_DIR` | — | filesystem store (development) |
-| `TRUST_STORE_DSN` | — | **PostgreSQL backend** — the dual-mode scaled / multi-DC store (spec P1b): the `trust_anchor` schema reached via `SECURITY DEFINER` procedures. **Takes precedence** over S3/FS/memory when set. Schema migration in `authbyte-db/trust-anchor/`; connect as the EXECUTE-only `trust_anchor_svc` role and source the DSN from Vault (it carries a password). |
+| `TRUST_STORE_DSN` | — | **PostgreSQL backend** — the dual-mode scaled / multi-DC store (spec P1b): the `trust_anchor` schema reached via `SECURITY DEFINER` procedures. **Takes precedence** over S3/FS/memory when set. Schema migration in `authbyte-db/trust-anchor/`; connect as the EXECUTE-only `trust_anchor_public` role and source the DSN from Vault (it carries a password). |
 | `TRUST_FETCH_TIMEOUT` / `MAX_TL_BYTES` | `30s` / `20MiB` | fetch guards |
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` | — / `svc:trust-anchor` | go-authbyte inbound validation (plus standard `DPOP_*` vars) |
 
@@ -176,7 +177,7 @@ root of the whole trust tree. The service fetches updates automatically but
 root — DSS's pinned `oj-keystore` is the precedent). Expected frequency:
 every few years; pivots rotate signers automatically in between.
 
-**First install**
+**First install — option A: operator-pinned certs (strongest)**
 
 1. Open the current OJ notice (the LOTL advertises it; today
    `https://eur-lex.europa.eu/eli/C/2026/1944/oj`).
@@ -184,6 +185,20 @@ every few years; pivots rotate signers automatically in between.
    `LOTL_BOOTSTRAP_CERTS_PATH`, set `OJ_PINNED_REFERENCE=C/2026/1944`.
 3. Start the service — it persists the set as bootstrap **v1** and the path
    is ignored from then on.
+
+**First install — option B: fetch the OJ notice from the EU CELLAR API**
+
+When no `LOTL_BOOTSTRAP_CERTS_PATH` is pinned but `OJ_PINNED_REFERENCE` is set,
+the service fetches that notice from the CELLAR API (same fetch/extract as the
+OJ watch) and seeds bootstrap **v1** from it — the pin is on the OJ *reference*,
+not the cert bytes. Activation is gated by `TRUST_BOOTSTRAP_AUTO_APPROVE`:
+
+- `true` — activate immediately (dev/CI; requires outbound network to
+  `publications.europa.eu`).
+- `false` (default) — fetch, **log the fingerprints**, and fail closed; review
+  them against the OJ notice, then set `TRUST_BOOTSTRAP_AUTO_APPROVE=true` (or
+  pin the certs via option A) to activate. Keeps an operator in the trust-root
+  loop (DECISIONS D6).
 
 **When `trust.bootstrap_review_needed` fires** (a new OJ reference was
 detected and the notice fetched + staged):
@@ -242,5 +257,9 @@ AUTH_ISSUER_URL=http://localhost:8080 SERVICE_AUDIENCE=svc:trust-anchor \
 go run ./cmd/server web
 ```
 
-Docker build context is the `sign-portal/` workspace root (local module
-replaces): `docker build -f trust-anchor/Dockerfile .`
+Docker build context is **this module directory** (no local `replace`s — the
+`gmb-sig/*` deps are fetched from the network at their tags): from `trust-anchor/`,
+`docker build -t trust-anchor:dev .`. In the local stack it's built + run via
+[`sign-portal/docker-compose.yml`](../docker-compose.yml) (see `RUN-LOCAL.md`),
+where first-install seeds the bootstrap from `LOTL_BOOTSTRAP_CERTS_PATH` (or the
+EU CELLAR API, gated by `TRUST_BOOTSTRAP_AUTO_APPROVE`).

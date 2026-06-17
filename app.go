@@ -104,9 +104,10 @@ func (a *App) init() error {
 		AcceptedStatuses: cfg.AcceptedStatuses(),
 		ActivationMode:   cfg.ActivationMode,
 		HoldAutoRelease:  cfg.HoldAutoRelease,
-		ExtraAnchorsPath: cfg.ExtraAnchorsPath,
-		OJNoticeURL:      cfg.OJNoticeURL,
-		StaleGrace:       cfg.StaleGrace,
+		ExtraAnchorsPath:     cfg.ExtraAnchorsPath,
+		OJNoticeURL:          cfg.OJNoticeURL,
+		BootstrapAutoApprove: cfg.BootstrapAutoApprove,
+		StaleGrace:           cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())
 	a.manager = ingest.NewManager(pipeline, a.store, a.events, a.Log())
 

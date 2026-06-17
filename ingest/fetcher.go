@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/gmb-sig/go-platform-kit/observability"
 )
 
 // ErrEgressBlocked marks a fetch refused by the egress allow-list.
@@ -35,8 +37,10 @@ type Fetcher struct {
 func NewFetcher(timeout time.Duration, maxSize int64, initialHosts ...string) *Fetcher {
 	f := &Fetcher{
 		// TLS certificate verification is the default transport behaviour and
-		// must never be disabled here — these fetches define trust.
-		client:  &http.Client{Timeout: timeout},
+		// must never be disabled here — these fetches define trust. The transport
+		// is otel-instrumented so LOTL/CELLAR/national-TL fetches show as client
+		// spans (no-op when tracing is inert).
+		client:  &http.Client{Timeout: timeout, Transport: observability.InstrumentedTransport(nil)},
 		timeout: timeout,
 		maxSize: maxSize,
 		allowed: map[string]struct{}{},

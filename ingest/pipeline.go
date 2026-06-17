@@ -32,6 +32,9 @@ type Config struct {
 	HoldAutoRelease  time.Duration
 	ExtraAnchorsPath string
 	OJNoticeURL      string
+	// BootstrapAutoApprove activates an EU-API-fetched first bootstrap without
+	// operator approval (first-install convenience; see Manager.Initialize).
+	BootstrapAutoApprove bool
 	// StaleGrace is the grace period past a list's NextUpdate before its data
 	// is flagged stale (served with a warning, never dropped).
 	StaleGrace time.Duration
