@@ -80,10 +80,16 @@ func (e *Emitter) Emit(ctx *azugo.Context, eventType string, sev secevents.Sever
 		zap.String(secevents.AttrSeverity, string(sev)),
 		zap.Any("attributes", ev.Attributes),
 	}
-	switch sev {
-	case secevents.SeverityCritical, secevents.SeverityHigh:
+	// Route the log level by severity AND outcome: reserve error for genuine
+	// failures/denials. A success-outcome event (e.g. a first-ingest anchor
+	// addition, which AnchorChange stamps High/success) is noteworthy, not an
+	// error — cap it at warn so the SIEM stream isn't a wall of red.
+	switch {
+	case outcome != broker.OutcomeSuccess &&
+		(sev == secevents.SeverityCritical || sev == secevents.SeverityHigh):
 		e.log.Error("security_event", fields...)
-	case secevents.SeverityWarning:
+	case sev == secevents.SeverityCritical || sev == secevents.SeverityHigh ||
+		sev == secevents.SeverityWarning:
 		e.log.Warn("security_event", fields...)
 	default:
 		e.log.Info("security_event", fields...)

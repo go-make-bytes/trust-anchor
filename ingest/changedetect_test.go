@@ -87,7 +87,7 @@ func TestRefreshRefetchesOnDigestChange(t *testing.T) {
 	prev.Territory("LV").NextUpdate = futureT()
 	prev.Territory("EE").NextUpdate = futureT()
 
-	// LV now publishes a different .sha2 → the full TL must be re-fetched + verified.
+	// LV now publishes a different.sha2 → the full TL must be re-fetched + verified.
 	ft.body[digestURL(lvURL)] = []byte("0000000000000000000000000000000000000000000000000000000000000000")
 	ft.counts = map[string]int{}
 

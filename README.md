@@ -8,7 +8,7 @@ trust-anchor lifecycle for the eSignature Portal:
 > API — with every anchor-set change observable as a security event.
 
 First consumer: the **webeid-service** (`WEBEID_TRUSTED_CA_CERTS_PATH`
-file contract). Later: go-csc validation, Audit & Evidence, preservation.
+file contract). Later: eparaksts-signer validation, Audit & Evidence, preservation.
 
 ---
 
@@ -162,7 +162,7 @@ its last good data.
   grants:
     - audience: svc:trust-anchor
       scopes: [trust:read]
-# later: svc:go-csc (validation), svc:audit-evidence → trust:read
+# later: svc:eparaksts-signer (validation), svc:audit-evidence → trust:read
 - client_id: svc:ops-tools          # ops/dpo tooling client
   grants:
     - audience: svc:trust-anchor
@@ -225,6 +225,11 @@ case rotate via a maintenance redeploy of the seed path with a fresh
   service against the national TL operator's publication, then
   `POST /v1/pending/{fingerprint}/approve`. Unapproved additions auto-release
   after `TRUST_HOLD_AUTO_RELEASE`.
+  *Severity vs log level:* "(high)" is the event's **administrative
+  importance**, not a log error. Because these carry `outcome=success`, they
+  are logged at **warn** (metadata-only changes at **info**) — `error` is
+  reserved for `outcome=failure`/`denied` events. So a first ingest adding
+  many anchors produces warns, not a wall of red.
 * **`trust.refresh_failure` (warning)** — a cycle failed; the last good
   snapshot is still served. Investigate upstream availability; data ages
   toward staleness, nothing breaks immediately.

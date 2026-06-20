@@ -6,7 +6,7 @@
 // `ingest` is NOT yet migrated onto them. That migration is a refactor of
 // trust-critical code whose acceptance bar is byte-identical output, so it must
 // be done where it can be built and run against the recorded fixtures — see
-// ../SOURCE-ADAPTER-PLAN.md. Nothing in this package is wired into the pipeline
+//../SOURCE-ADAPTER-PLAN.md. Nothing in this package is wired into the pipeline
 // yet; it compiles standalone and exists to pin the contract.
 package source
 

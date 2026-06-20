@@ -3,10 +3,10 @@ module github.com/gmb-sig/trust-anchor
 go 1.26.4
 
 require (
-	azugo.io/azugo v0.33.0
+	azugo.io/azugo v0.34.0
 	github.com/beevik/etree v1.6.0
 	github.com/gmb-sig/go-authbyte v0.1.0
-	github.com/gmb-sig/go-platform-kit v0.10.0
+	github.com/gmb-sig/go-platform-kit v0.11.0
 	github.com/gmb-sig/go-sec-events v1.0.0
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -20,8 +20,8 @@ require (
 )
 
 require (
-	azugo.io/opentelemetry v0.33.0 // indirect
-	github.com/VictoriaMetrics/metrics v1.43.2 // indirect
+	azugo.io/opentelemetry v0.33.1 // indirect
+	github.com/VictoriaMetrics/metrics v1.44.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -95,11 +95,11 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260615183401-62b3387ff324 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260615183401-62b3387ff324 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260618152121-87f3d3e198d3 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
 
-require azugo.io/core v0.33.0
+require azugo.io/core v0.34.0

@@ -16,7 +16,7 @@ import (
 // national TLs over the network. Guarded behind the `live` build tag — CI
 // runs fixtures only.
 //
-//	go test -tags live ./ingest/ -run TestLiveRefresh -v
+//	go test -tags live./ingest/ -run TestLiveRefresh -v
 func TestLiveRefresh(t *testing.T) {
 	fetcher := NewFetcher(60*time.Second, 20*1024*1024)
 	cfg := Config{
