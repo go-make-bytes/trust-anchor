@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gmb-sig/go-platform-kit/observability"
+	"github.com/gmb-lib/go-platform-kit/observability"
 )
 
 // ErrEgressBlocked marks a fetch refused by the egress allow-list.

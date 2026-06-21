@@ -5,8 +5,8 @@ import (
 	"azugo.io/azugo"
 	corehttp "azugo.io/core/http"
 
-	"github.com/gmb-sig/go-platform-kit/broker"
-	"github.com/gmb-sig/go-sec-events/secevents"
+	"github.com/gmb-lib/go-platform-kit/broker"
+	"github.com/gmb-lib/go-sec-events/secevents"
 	trustanchor "github.com/gmb-sig/trust-anchor"
 )
 

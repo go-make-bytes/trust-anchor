@@ -5,9 +5,9 @@ go 1.26.4
 require (
 	azugo.io/azugo v0.34.0
 	github.com/beevik/etree v1.6.0
-	github.com/gmb-sig/go-authbyte v0.1.0
-	github.com/gmb-sig/go-platform-kit v0.11.0
-	github.com/gmb-sig/go-sec-events v1.0.0
+	github.com/gmb-lib/go-authbyte v0.9.0
+	github.com/gmb-lib/go-platform-kit v1.0.0
+	github.com/gmb-lib/go-sec-events v1.0.2
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lafriks/go-xmldsig/v2 v2.3.0

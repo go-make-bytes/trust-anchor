@@ -19,7 +19,7 @@ jobs:
       - name: Checkout go-platform-kit
         uses: actions/checkout@v4
         with:
-          repository: gmb-sig/go-platform-kit
+          repository: gmb-lib/go-platform-kit
 
 
       - name: Set up Go

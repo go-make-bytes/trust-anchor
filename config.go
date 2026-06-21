@@ -8,8 +8,8 @@ import (
 	"azugo.io/core/validation"
 	"github.com/spf13/viper"
 
-	"github.com/gmb-sig/go-authbyte/authclient"
-	pkconfig "github.com/gmb-sig/go-platform-kit/config"
+	"github.com/gmb-lib/go-authbyte/authclient"
+	pkconfig "github.com/gmb-lib/go-platform-kit/config"
 )
 
 // Snapshot store backends.

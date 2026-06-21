@@ -13,8 +13,8 @@ import (
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"github.com/gmb-sig/go-authbyte/authclient"
-	"github.com/gmb-sig/go-platform-kit/platform"
+	"github.com/gmb-lib/go-authbyte/authclient"
+	"github.com/gmb-lib/go-platform-kit/platform"
 
 	"github.com/gmb-sig/trust-anchor/events"
 	"github.com/gmb-sig/trust-anchor/ingest"
@@ -99,11 +99,11 @@ func (a *App) init() error {
 
 	fetcher := ingest.NewFetcher(cfg.FetchTimeout, cfg.MaxTLBytes)
 	pipeline := ingest.NewPipeline(ingest.Config{
-		LOTLURL:          cfg.LOTLURL,
-		Territories:      cfg.Territories(),
-		AcceptedStatuses: cfg.AcceptedStatuses(),
-		ActivationMode:   cfg.ActivationMode,
-		HoldAutoRelease:  cfg.HoldAutoRelease,
+		LOTLURL:              cfg.LOTLURL,
+		Territories:          cfg.Territories(),
+		AcceptedStatuses:     cfg.AcceptedStatuses(),
+		ActivationMode:       cfg.ActivationMode,
+		HoldAutoRelease:      cfg.HoldAutoRelease,
 		ExtraAnchorsPath:     cfg.ExtraAnchorsPath,
 		OJNoticeURL:          cfg.OJNoticeURL,
 		BootstrapAutoApprove: cfg.BootstrapAutoApprove,
