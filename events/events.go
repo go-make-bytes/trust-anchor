@@ -97,8 +97,7 @@ func (e *Emitter) Emit(ctx *azugo.Context, eventType string, sev secevents.Sever
 }
 
 // AnchorChange emits one trust.anchor_change event for a diff entry.
-// Additions and removals are high severity, metadata changes info (task §4
-// change-governance rule).
+// Additions and removals are high severity, metadata changes info.
 func (e *Emitter) AnchorChange(ctx *azugo.Context, kind, territory, fingerprint, tspName, serviceName, status, detail string, pending bool) {
 	sev := secevents.SeverityInfo
 	if kind == "added" || kind == "removed" {

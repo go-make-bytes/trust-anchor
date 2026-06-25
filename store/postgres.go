@@ -14,12 +14,11 @@ import (
 
 // Postgres is the dual-mode DB-backed Store: versioned snapshot/bootstrap rows
 // in the platform `trust_anchor` schema, reached ONLY through SECURITY DEFINER
-// procedures under an EXECUTE-only role (BRD §7; authbyte-db/trust-anchor). The
+// procedures under an EXECUTE-only role (authbyte-db/trust-anchor). The
 // full serialized object is the source of truth; this package never issues raw
 // table SQL — it only CALLs the procedures (mirrors authbyte-core/store).
 //
-// Selected when TRUST_STORE_DSN is set (TRUST-INFRASTRUCTURE-EVOLUTION-SPEC.md
-// P1b); FS/S3/memory remain the single-node default.
+// Selected when TRUST_STORE_DSN is set; FS/S3/memory remain the single-node default.
 type Postgres struct {
 	pool *pgxpool.Pool
 }

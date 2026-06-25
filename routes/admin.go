@@ -33,7 +33,7 @@ func (r *router) approvePending(ctx *azugo.Context) {
 	ctx.JSON(&response.Approved{Snapshot: snap.ID, Fingerprint: fingerprint})
 }
 
-// approveBootstrap activates a staged OJ bootstrap update (§4.7). The caller
+// approveBootstrap activates a staged OJ bootstrap update. The caller
 // confirms the OJ reference they reviewed out-of-band; a mismatch with the
 // staged update is refused.
 //

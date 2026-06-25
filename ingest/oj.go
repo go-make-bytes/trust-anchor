@@ -89,7 +89,7 @@ func (p *Pipeline) FetchFirstBootstrap(ctx context.Context, ojRef string, now ti
 	return boot, p.cfg.BootstrapAutoApprove, nil
 }
 
-// stageBootstrapUpdate handles the OJ watch (task §4.7): when the LOTL
+// stageBootstrapUpdate handles the OJ watch: when the LOTL
 // advertises an OJ reference different from the active bootstrap's, it
 // fetches the notice (best-effort — failures are treated as "no change"),
 // extracts the certificates and returns a staged pending update for operator

@@ -1,13 +1,13 @@
 // Package source defines the multi-source trust adapter contract for the
-// trust-anchor service (TRUST-INFRASTRUCTURE-EVOLUTION-SPEC.md P4).
+// trust-anchor service.
 //
 // SCAFFOLD ONLY. The source-type taxonomy and the adapter interfaces are
 // defined here, but the existing LOTL / national-TL ingestion in package
 // `ingest` is NOT yet migrated onto them. That migration is a refactor of
 // trust-critical code whose acceptance bar is byte-identical output, so it must
-// be done where it can be built and run against the recorded fixtures — see
-//../SOURCE-ADAPTER-PLAN.md. Nothing in this package is wired into the pipeline
-// yet; it compiles standalone and exists to pin the contract.
+// be done where it can be built and run against the recorded fixtures. Nothing
+// in this package is wired into the pipeline yet; it compiles standalone and
+// exists to pin the contract.
 package source
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/gmb-sig/trust-anchor/trust"
 )
 
-// Type is the source-type discriminator (spec §5). It becomes a first-class
+// Type is the source-type discriminator. It becomes a first-class
 // column/field on every source so new sources are new adapters, not new
 // branches through the pipeline.
 type Type string
@@ -34,8 +34,8 @@ const (
 	TypeRPRegistry Type = "rp-registry" // CIR 2025/848
 )
 
-// Raw is the fetched source payload plus the change-detection metadata (spec
-// P2): Digest is the published sibling ".sha2" (SHA-256 hex), Sequence is the
+// Raw is the fetched source payload plus the change-detection metadata:
+// Digest is the published sibling ".sha2" (SHA-256 hex), Sequence is the
 // list's TSLSequenceNumber when applicable. The manager uses these to skip
 // unchanged sources before Verify.
 type Raw struct {
@@ -77,21 +77,21 @@ type Source interface {
 // necessarily TS 119 612 XMLDSig.
 //
 // The concrete entitlement record type is intentionally left undefined in this
-// scaffold — it is specified against CIR 2025/848 + the ARF annex when P6 is
-// scheduled (see plan).
+// scaffold — it is specified against CIR 2025/848 + the ARF annex when that
+// work is scheduled.
 type RegistrySource interface {
 	Type() Type
 	ID() string
 	Fetch(ctx context.Context, last *Raw) (*Raw, error)
 	Verify(ctx context.Context, raw *Raw, pinnedSignersDER [][]byte) ([]byte, error)
 	// ExtractEntitlements parses verified bytes into the registry projection.
-	// Return type TBD at P6 — see SOURCE-ADAPTER-PLAN.md §"RP registry".
+	// Return type is not yet defined.
 	// ExtractEntitlements(verified []byte) ([]Entitlement, error)
 }
 
 // ErrUnchanged is returned by Fetch when the sibling digest matches the last
 // seen value and the source is within NextUpdate — the manager skips
-// Verify/Extract and carries the previous projection forward (spec P2).
+// Verify/Extract and carries the previous projection forward.
 var ErrUnchanged = errUnchanged{}
 
 type errUnchanged struct{}

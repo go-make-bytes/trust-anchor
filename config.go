@@ -20,7 +20,7 @@ const (
 	StoreBackendMemory   = "memory"
 )
 
-// Configuration is the trust-anchor service configuration (task §7).
+// Configuration is the trust-anchor service configuration.
 type Configuration struct {
 	*pkconfig.BaseConfiguration `mapstructure:",squash"`
 

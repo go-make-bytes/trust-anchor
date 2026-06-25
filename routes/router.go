@@ -1,4 +1,4 @@
-// Package routes registers the trust-anchor HTTP API (task §5).
+// Package routes registers the trust-anchor HTTP API.
 package routes
 
 import (

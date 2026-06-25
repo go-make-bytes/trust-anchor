@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// P2 input-side change detection (spec §6, §14.3). These exercise the sibling
+// Input-side change detection. These exercise the sibling
 // ".sha2" skip in fetchTerritory: the fixtureTransport serves each TL's ".sha2"
 // (via digestURL) with the SHA-256 of that TL fixture — exactly what the
 // publisher serves. NextUpdate is set explicitly on the previous snapshot so the

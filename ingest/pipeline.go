@@ -96,7 +96,7 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
 	}
 
-	// OJ watch: detect + fetch + stage, never activate (§4.7).
+	// OJ watch: detect + fetch + stage, never activate.
 	var prevStaged *trust.PendingBootstrap
 	if prev != nil {
 		prevStaged = prev.PendingBootstrap
