@@ -3,26 +3,26 @@ module github.com/gmb-sig/trust-anchor
 go 1.26.4
 
 require (
-	azugo.io/azugo v0.34.0
+	azugo.io/azugo v0.34.3
 	github.com/beevik/etree v1.6.0
-	github.com/gmb-lib/go-authbyte v0.11.0
-	github.com/gmb-lib/go-platform-kit v1.1.0
+	github.com/gmb-lib/go-authbyte v0.13.0
+	github.com/gmb-lib/go-platform-kit v1.3.0
 	github.com/gmb-lib/go-sec-events v1.0.2
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lafriks/go-xmldsig/v2 v2.3.0
-	github.com/minio/minio-go/v7 v7.2.0
+	github.com/minio/minio-go/v7 v7.2.1
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
-	github.com/valyala/fasthttp v1.71.0
+	github.com/valyala/fasthttp v1.72.0
 	go.uber.org/zap v1.28.0
 )
 
 require (
 	azugo.io/opentelemetry v0.33.1 // indirect
 	github.com/VictoriaMetrics/metrics v1.44.0 // indirect
-	github.com/andybalholm/brotli v1.2.1 // indirect
+	github.com/andybalholm/brotli v1.2.2 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.4.0 // indirect
@@ -46,8 +46,8 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/klauspost/compress v1.18.6 // indirect
-	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/klauspost/compress v1.19.0 // indirect
+	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/klauspost/crc32 v1.3.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
@@ -95,11 +95,11 @@ require (
 	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260622175928-b703f567277d // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260622175928-b703f567277d // indirect
-	google.golang.org/grpc v1.81.1 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260630182238-925bb5da69e7 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260630182238-925bb5da69e7 // indirect
+	google.golang.org/grpc v1.82.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
 )
 
-require azugo.io/core v0.34.0
+require azugo.io/core v0.34.1
