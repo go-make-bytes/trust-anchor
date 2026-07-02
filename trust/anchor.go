@@ -244,10 +244,10 @@ func (s *Snapshot) EarliestNextUpdate() time.Time {
 // of generation and stale flags (serve-time derived) are excluded so an
 // unchanged refresh keeps the same ID/ETag.
 type idContent struct {
-	LOTLSequence uint64           `json:"lotlSequence"`
-	Territories  []idTerritory    `json:"territories"`
-	Overlay      []idAnchor       `json:"overlay,omitempty"`
-	Pending      []string         `json:"pending,omitempty"`
+	LOTLSequence uint64        `json:"lotlSequence"`
+	Territories  []idTerritory `json:"territories"`
+	Overlay      []idAnchor    `json:"overlay,omitempty"`
+	Pending      []string      `json:"pending,omitempty"`
 }
 
 type idTerritory struct {

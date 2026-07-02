@@ -56,7 +56,7 @@ func NewPipeline(cfg Config, fetcher *Fetcher, ev *events.Emitter, log *zap.Logg
 }
 
 func logUint(k string, v uint64) zap.Field { return zap.Uint64(k, v) }
-func logInt(k string, v int) zap.Field    { return zap.Int(k, v) }
+func logInt(k string, v int) zap.Field     { return zap.Int(k, v) }
 
 // sha256hex is the lowercase hex SHA-256 of b — the value a TL publisher serves
 // in the sibling ".sha2" (confirmed equal). Stored per territory for P2 change
