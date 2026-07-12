@@ -1,0 +1,6 @@
+# Fixture for TestLoadInternalBadPEM: certificate is neither valid PEM nor DER.
+anchors:
+  - name: "Bad Pem Anchor"
+    type: access_ca
+    territory: LV
+    certificate: "this is not a certificate"

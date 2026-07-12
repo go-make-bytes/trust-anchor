@@ -6,10 +6,13 @@
 package trustanchor
 
 import (
+	"crypto/subtle"
 	"fmt"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/server"
+	"azugo.io/azugo/token"
+	"azugo.io/azugo/user"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
@@ -105,17 +108,23 @@ func (a *App) init() error {
 		ActivationMode:       cfg.ActivationMode,
 		HoldAutoRelease:      cfg.HoldAutoRelease,
 		ExtraAnchorsPath:     cfg.ExtraAnchorsPath,
+		InternalTrustSource:  cfg.InternalTrustSource,
 		OJNoticeURL:          cfg.OJNoticeURL,
 		BootstrapAutoApprove: cfg.BootstrapAutoApprove,
 		StaleGrace:           cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())
 	a.manager = ingest.NewManager(pipeline, a.store, a.events, a.Log())
 
-	a.authClient, err = authclient.New(cfg.Auth)
-	if err != nil {
-		return fmt.Errorf("trust-anchor: auth client: %w", err)
+	switch cfg.AuthMode {
+	case AuthModeInternal:
+		a.authMW = a.internalAuthMiddleware()
+	default: // AuthModeDPoP — byte-identical to the pre-T4 wiring.
+		a.authClient, err = authclient.New(cfg.Auth)
+		if err != nil {
+			return fmt.Errorf("trust-anchor: auth client: %w", err)
+		}
+		a.authMW = a.authClient.Authenticate()
 	}
-	a.authMW = a.authClient.Authenticate()
 
 	if err := a.AddTask(tasks.NewRefreshTask(a.manager, cfg.RefreshInterval, a.Log())); err != nil {
 		return err
@@ -154,9 +163,38 @@ func (a *App) Events() *events.Emitter { return a.events }
 // Store returns the snapshot store.
 func (a *App) Store() store.Store { return a.store }
 
+// internalAuthMiddleware is the AUTH_MODE=internal inbound middleware for
+// co-located, network-trusted deployments. Every request is granted
+// trust:read; trust:admin is granted in addition when the request's
+// X-API-Key matches the configured TrustAdminKey (constant-time compare,
+// guarded against an empty configured key — boot fails closed before this
+// can run with TrustAdminKey == "", see Configuration.Validate).
+//
+// Routes and requireScope are completely unmodified: an admin-gated route
+// called without (or with a wrong) key is denied by requireScope exactly as
+// a missing scope is today — same 403 + authz.denied event, same response
+// body. The key value itself never reaches a log, event, or error.
+func (a *App) internalAuthMiddleware() azugo.RequestHandlerFunc {
+	return func(next azugo.RequestHandler) azugo.RequestHandler {
+		return func(ctx *azugo.Context) {
+			scope := "trust:read"
+			if key := a.config.TrustAdminKey; key != "" &&
+				subtle.ConstantTimeCompare([]byte(ctx.Header.Get("X-API-Key")), []byte(key)) == 1 {
+				scope += ",trust:admin"
+			}
+			ctx.SetUser(user.New(map[string]token.ClaimStrings{
+				"sub":   {"internal"},
+				"scope": {scope},
+			}))
+			next(ctx)
+		}
+	}
+}
+
 // AuthMiddleware returns the inbound authentication middleware.
 func (a *App) AuthMiddleware() azugo.RequestHandlerFunc { return a.authMW }
 
 // SetAuthMiddleware overrides the inbound authentication middleware. Test use
-// only — production wiring always uses the go-authbyte DPoP middleware.
+// only — production wiring always uses one of the two real middlewares
+// selected by AuthMode (go-authbyte DPoP, or internalAuthMiddleware).
 func (a *App) SetAuthMiddleware(mw azugo.RequestHandlerFunc) { a.authMW = mw }

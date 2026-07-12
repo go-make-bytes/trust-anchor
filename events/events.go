@@ -26,6 +26,10 @@ const (
 	EventRefreshFailure        = "trust.refresh_failure"
 	EventStale                 = "trust.stale"
 	EventEgressViolation       = "egress.violation" // platform-standard type
+	// EventInternalSourceError fires when INTERNAL_TRUST_SOURCE fails to
+	// load or validate — the previous internal anchor set is carried over
+	// (fail-safe), same posture as EventRefreshFailure for territories.
+	EventInternalSourceError = "trust.internal_source_error"
 )
 
 // Emitter emits security events with or without a request context.
@@ -126,6 +130,15 @@ func (e *Emitter) RefreshFailure(ctx *azugo.Context, stage, reason string) {
 	e.Emit(ctx, EventRefreshFailure, secevents.SeverityWarning, broker.OutcomeFailure, map[string]any{
 		"stage":  stage,
 		"reason": reason,
+	})
+}
+
+// InternalSourceError emits the fail-safe warning: INTERNAL_TRUST_SOURCE
+// failed to load or validate and the previous internal anchor set is still
+// being served. err.Error() only — never file contents or key material.
+func (e *Emitter) InternalSourceError(ctx *azugo.Context, err error) {
+	e.Emit(ctx, EventInternalSourceError, secevents.SeverityWarning, broker.OutcomeFailure, map[string]any{
+		"error": err.Error(),
 	})
 }
 

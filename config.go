@@ -1,6 +1,7 @@
 package trustanchor
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -10,6 +11,21 @@ import (
 
 	"github.com/gmb-lib/go-authbyte/authclient"
 	pkconfig "github.com/gmb-lib/go-platform-kit/config"
+)
+
+// errTrustAdminKeyRequired is returned by Validate when AUTH_MODE=internal
+// and TRUST_ADMIN_KEY is empty. Value-free by construction — the key itself
+// must never appear in an error message.
+var errTrustAdminKeyRequired = errors.New("trust-anchor: config: TRUST_ADMIN_KEY is required when AUTH_MODE=internal")
+
+// errAuthConfigRequired is returned by Validate when AUTH_MODE=dpop and the
+// auth section was never bound (defensive: Bind always allocates it).
+var errAuthConfigRequired = errors.New("trust-anchor: config: auth section is required when AUTH_MODE=dpop")
+
+// Inbound authentication modes (AuthMode).
+const (
+	AuthModeDPoP     = "dpop"
+	AuthModeInternal = "internal"
 )
 
 // Snapshot store backends.
@@ -25,8 +41,27 @@ type Configuration struct {
 	*pkconfig.BaseConfiguration `mapstructure:",squash"`
 
 	// Auth is the go-authbyte inbound DPoP validation config
-	// (AUTH_ISSUER_URL / SERVICE_AUDIENCE=svc:trust-anchor / …).
-	Auth *authclient.Configuration `mapstructure:"auth"`
+	// (AUTH_ISSUER_URL / SERVICE_AUDIENCE=svc:trust-anchor / …). Only
+	// consulted (and validated) when AuthMode is "dpop": validate:"-" keeps
+	// the automatic struct-dive out of this section so AUTH_MODE=internal
+	// boots with no DPoP environment at all; the mode-conditional
+	// c.Auth.Validate call in Validate below is the dpop-mode enforcement
+	// (it runs valid.Struct on this same section, so no tag is lost).
+	Auth *authclient.Configuration `mapstructure:"auth" validate:"-"`
+
+	// AuthMode selects the /v1 inbound authentication strategy: "dpop"
+	// (default) validates DPoP-bound tokens via Auth using the existing
+	// go-authbyte middleware; "internal" is for co-located, network-trusted
+	// deployments — every request is granted trust:read, and trust:admin is
+	// granted additionally on a matching X-API-Key (see internalAuthMiddleware
+	// in app.go). Routes and requireScope are identical in both modes.
+	AuthMode string `mapstructure:"auth_mode" validate:"oneof=dpop internal"`
+
+	// TrustAdminKey is the constant-time-compared X-API-Key value that grants
+	// trust:admin scope in AUTH_MODE=internal. Required (non-empty) when
+	// AuthMode is "internal"; ignored otherwise. Secret — must never appear
+	// in logs, events, or error messages.
+	TrustAdminKey string `mapstructure:"trust_admin_key"`
 
 	// LOTLURL is the EU List of Trusted Lists location.
 	LOTLURL string `mapstructure:"lotl_url" validate:"required,url"`
@@ -64,6 +99,12 @@ type Configuration struct {
 	// dir). Production deployments leave it empty.
 	ExtraAnchorsPath string `mapstructure:"trust_extra_anchors_path"`
 
+	// InternalTrustSource is the optional operator-declared anchor file
+	// (YAML — INTERNAL_TRUST_SOURCE). Parsed fail-closed via trust.LoadInternal
+	// and merged into every snapshot like the overlay; empty means no
+	// internal anchors are configured.
+	InternalTrustSource string `mapstructure:"internal_trust_source"`
+
 	// Snapshot store (platform standard: S3 API). Backend is derived: bucket
 	// set → s3, dir set → fs, neither → memory (development only).
 	SnapshotBucket    string `mapstructure:"trust_snapshot_bucket"`
@@ -100,6 +141,10 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	c.BaseConfiguration.Bind("", v)
 	c.Auth = azugocfg.Bind(c.Auth, "auth", v)
 
+	v.SetDefault("auth_mode", AuthModeDPoP)
+	_ = v.BindEnv("auth_mode", "AUTH_MODE")
+	_ = v.BindEnv("trust_admin_key", "TRUST_ADMIN_KEY")
+
 	v.SetDefault("lotl_url", "https://ec.europa.eu/tools/lotl/eu-lotl.xml")
 	v.SetDefault("trust_territories", "LV,EE")
 	v.SetDefault("trust_accepted_statuses", "granted")
@@ -123,6 +168,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("trust_hold_auto_release", "TRUST_HOLD_AUTO_RELEASE")
 	_ = v.BindEnv("trust_stale_grace", "TRUST_STALE_GRACE")
 	_ = v.BindEnv("trust_extra_anchors_path", "TRUST_EXTRA_ANCHORS_PATH")
+	_ = v.BindEnv("internal_trust_source", "INTERNAL_TRUST_SOURCE")
 	_ = v.BindEnv("trust_snapshot_bucket", "TRUST_SNAPSHOT_BUCKET")
 	_ = v.BindEnv("trust_snapshot_endpoint", "TRUST_SNAPSHOT_ENDPOINT")
 	_ = v.BindEnv("trust_snapshot_access_key", "TRUST_SNAPSHOT_ACCESS_KEY")
@@ -142,6 +188,17 @@ func (c *Configuration) Validate(valid *validation.Validate) error {
 	}
 	if err := valid.Struct(c); err != nil {
 		return err
+	}
+	if c.AuthMode != AuthModeDPoP {
+		if c.TrustAdminKey == "" {
+			return errTrustAdminKeyRequired
+		}
+		return nil
+	}
+	// Intentionally defensive — unreachable today: Bind unconditionally
+	// allocates Auth via azugocfg.Bind.
+	if c.Auth == nil {
+		return errAuthConfigRequired
 	}
 	return c.Auth.Validate(valid)
 }

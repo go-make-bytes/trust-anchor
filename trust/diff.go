@@ -32,8 +32,8 @@ type Diff struct {
 func (d *Diff) Empty() bool { return d == nil || len(d.Entries) == 0 }
 
 // ComputeDiff diffs the served anchor sets of two snapshots (territories +
-// overlay) by certificate fingerprint. prev may be nil (first snapshot —
-// everything is an addition).
+// overlay + internal) by certificate fingerprint. prev may be nil (first
+// snapshot — everything is an addition).
 func ComputeDiff(prev, next *Snapshot) *Diff {
 	d := &Diff{}
 	if prev != nil {
@@ -89,6 +89,9 @@ func anchorIndex(s *Snapshot) map[string]indexedAnchor {
 	}
 	for _, a := range s.Overlay {
 		out["overlay/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: "overlay"}
+	}
+	for _, a := range s.Internal {
+		out["internal/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: "internal"}
 	}
 	return out
 }

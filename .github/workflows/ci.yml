@@ -35,3 +35,9 @@ jobs:
       # build tag and are run manually (see README, fixture refresh runbook).
       - name: Test (race)
         run: go test -race -count=1 ./...
+
+      # Untrusted-input parser (INTERNAL_TRUST_SOURCE YAML) must never panic
+      # (CLAUDE.md rule 5 / DECISIONS.md D17). Short CI budget; run locally
+      # for longer when touching trust/internal.go.
+      - name: Fuzz (short) — internal trust source parser
+        run: go test ./trust -run '^$' -fuzz FuzzLoadInternal -fuzztime 30s

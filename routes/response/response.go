@@ -61,6 +61,7 @@ type Snapshot struct {
 	AdvertisedOJ     string                `json:"advertisedOj,omitempty"`
 	Territories      []TerritorySummary    `json:"territories"`
 	OverlayCount     int                   `json:"overlayCount"`
+	InternalCount    int                   `json:"internalCount"`
 	Diff             *trust.Diff           `json:"diff,omitempty"`
 	Pending          []trust.PendingAnchor `json:"pending,omitempty"`
 	PendingBootstrap *PendingBootstrap     `json:"pendingBootstrap,omitempty"`
@@ -90,6 +91,7 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 		LOTLPivotSeq:   snap.LOTLPivotSeq,
 		AdvertisedOJ:   snap.AdvertisedOJ,
 		OverlayCount:   len(snap.Overlay),
+		InternalCount:  len(snap.Internal),
 		Diff:           snap.Diff,
 		Pending:        snap.Pending,
 	}

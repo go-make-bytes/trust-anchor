@@ -1,0 +1,6 @@
+# Fixture for TestLoadInternalMissingCertSource: neither certificate nor
+# certificateFile is set.
+anchors:
+  - name: "No Cert Anchor"
+    type: access_ca
+    territory: LV

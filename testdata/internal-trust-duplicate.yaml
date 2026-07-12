@@ -1,0 +1,30 @@
+# Fixture for TestLoadInternalDuplicateFingerprint: two entries declare the
+# SAME certificate (byte-identical PEM) under different names/types — an
+# operator mistake that must be rejected, not silently deduped.
+anchors:
+  - name: "Dup One"
+    type: pid_provider
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBKjCB0aADAgECAgEBMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMTFEludGVybmFs
+      IFRlc3QgQ0EgT25lMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEd
+      MBsGA1UEAxMUSW50ZXJuYWwgVGVzdCBDQSBPbmUwWTATBgcqhkjOPQIBBggqhkjO
+      PQMBBwNCAARJDZ2MSeXpWnjKmKBX+gVXH9G8RLCsuCR6D9xkpMHHOOVdQS/ien8l
+      t9ZIcdtDXCOtruMthLFxb/zNtJ2DoKQRMAoGCCqGSM49BAMCA0gAMEUCIGm8VzIq
+      3GWAoclhLI6wKjgV3tFsu7faKU4Ou5y44ZXYAiEA9q13QOWzseqWzpX0yRwABd6g
+      n/nizS7hefaHu9j6dHQ=
+      -----END CERTIFICATE-----
+  - name: "Dup Two"
+    type: qeaa_provider
+    territory: EE
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBKjCB0aADAgECAgEBMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMTFEludGVybmFs
+      IFRlc3QgQ0EgT25lMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEd
+      MBsGA1UEAxMUSW50ZXJuYWwgVGVzdCBDQSBPbmUwWTATBgcqhkjOPQIBBggqhkjO
+      PQMBBwNCAARJDZ2MSeXpWnjKmKBX+gVXH9G8RLCsuCR6D9xkpMHHOOVdQS/ien8l
+      t9ZIcdtDXCOtruMthLFxb/zNtJ2DoKQRMAoGCCqGSM49BAMCA0gAMEUCIGm8VzIq
+      3GWAoclhLI6wKjgV3tFsu7faKU4Ou5y44ZXYAiEA9q13QOWzseqWzpX0yRwABd6g
+      n/nizS7hefaHu9j6dHQ=
+      -----END CERTIFICATE-----

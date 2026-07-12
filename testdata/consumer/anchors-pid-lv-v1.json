@@ -1,0 +1,39 @@
+{
+  "snapshot": "3f7a1c9e5b2d8f4a6c0e2b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a",
+  "generatedAt": "2026-07-01T06:00:00Z",
+  "stale": false,
+  "anchors": [
+    {
+      "territory": "LV",
+      "source": "tl",
+      "tspName": "Latvia PID Provider",
+      "serviceName": "PID Provider CA",
+      "serviceType": "http://uri.etsi.org/TrstSvc/Svctype/EUDI/PIDProvider",
+      "status": "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted",
+      "statusStartingTime": "2026-01-01T00:00:00Z",
+      "certDer": "MIIBzTCCAXOgAwIBAgIBATAKBggqhkjOPQQDAjBOMQswCQYDVQQGEwJMVjEgMB4GA1UEChMXV1AtMDYgc3ludGhldGljIGZpeHR1cmUxHTAbBgNVBAMTFExWIFBJRCBQcm92aWRlciBDQSAxMB4XDTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowTjELMAkGA1UEBhMCTFYxIDAeBgNVBAoTF1dQLTA2IHN5bnRoZXRpYyBmaXh0dXJlMR0wGwYDVQQDExRMViBQSUQgUHJvdmlkZXIgQ0EgMTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABDPFjuTvUA17afBartdc/wf2TPKCQPNOdG7pvY7L9vXF13wIR4wQbTWLcRjfbL67zr2cNZsPw1tSSH6CfYLxaiijQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBS1J4P4uNFVsxbPO02InttW/Wb1EjAKBggqhkjOPQQDAgNIADBFAiAD1laydHzd357piS5M08LCdZopw6leo+5cIXUtX1WTCgIhAI8OGMdLvV/eJVnQRk4OHAObUlXYGJIP/4QEgdetIQEx",
+      "fingerprintSha256": "f45f4a094e455eb37867542ac8fae50230e0c16c39528fd66cbba45d85b19100",
+      "subject": "CN=LV PID Provider CA 1,O=WP-06 synthetic fixture,C=LV",
+      "notBefore": "2026-01-01T00:00:00Z",
+      "notAfter": "2036-01-01T00:00:00Z",
+      "qcWithQscd": false,
+      "tlSequence": 42
+    },
+    {
+      "territory": "LV",
+      "source": "tl",
+      "tspName": "Latvia PID Provider",
+      "serviceName": "PID Provider CA 2",
+      "serviceType": "http://uri.etsi.org/TrstSvc/Svctype/EUDI/PIDProvider",
+      "status": "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted",
+      "statusStartingTime": "2026-01-01T00:00:00Z",
+      "certDer": "MIIBzDCCAXOgAwIBAgIBATAKBggqhkjOPQQDAjBOMQswCQYDVQQGEwJMVjEgMB4GA1UEChMXV1AtMDYgc3ludGhldGljIGZpeHR1cmUxHTAbBgNVBAMTFExWIFBJRCBQcm92aWRlciBDQSAyMB4XDTI2MDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowTjELMAkGA1UEBhMCTFYxIDAeBgNVBAoTF1dQLTA2IHN5bnRoZXRpYyBmaXh0dXJlMR0wGwYDVQQDExRMViBQSUQgUHJvdmlkZXIgQ0EgMjBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABALAXXU1Pdg9VOvoOFJWAhAlDF2VxVyljllJ97uiqeIIq44+BT/hx89ZLoFD0UutbK5qOOkw9SKesiZXCtsK8RqjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBRcRHkFENhorVq0syretzla6R7otjAKBggqhkjOPQQDAgNHADBEAiB136NR9bYbq+OQ5rPEM+cVyijuKLRI3P2SvrCpYXyrewIgeV/o67v3QKCOm4IG4CgIeIeU/z2UJeERtOgkbi4h/6s=",
+      "fingerprintSha256": "8b355d37412e76240f65cf3beb69ac30c8251285a2a880426d72444bb57c3644",
+      "subject": "CN=LV PID Provider CA 2,O=WP-06 synthetic fixture,C=LV",
+      "notBefore": "2026-01-01T00:00:00Z",
+      "notAfter": "2036-01-01T00:00:00Z",
+      "qcWithQscd": false,
+      "tlSequence": 42
+    }
+  ]
+}

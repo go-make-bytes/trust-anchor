@@ -1,0 +1,7 @@
+# Fixture for TestLoadInternalMissingFile: certificateFile points at a path
+# that does not exist.
+anchors:
+  - name: "Missing File Anchor"
+    type: access_ca
+    territory: LV
+    certificateFile: does-not-exist.pem

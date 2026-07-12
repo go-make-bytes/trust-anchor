@@ -1,0 +1,26 @@
+# Fixture for TestLoadInternalMultipleCertsInEntry: exactly ONE certificate is
+# required per entry; a PEM blob with two CERTIFICATE blocks must be rejected
+# even though each block parses fine individually.
+anchors:
+  - name: "Multi Cert Anchor"
+    type: access_ca
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBNTCB3aADAgECAgEEMAoGCCqGSM49BAMCMCUxIzAhBgNVBAMTGkludGVybmFs
+      IFRlc3QgQ0EgTXVsdGkgT25lMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAw
+      MFowJTEjMCEGA1UEAxMaSW50ZXJuYWwgVGVzdCBDQSBNdWx0aSBPbmUwWTATBgcq
+      hkjOPQIBBggqhkjOPQMBBwNCAATuG6owucHNLc/16QzEalCJBcowcy9v+uZ7cbzb
+      L5kSa6q/JwcNkAaDlTp92eN1eFNU/xow5OmRYx9ToWYrUSGMMAoGCCqGSM49BAMC
+      A0cAMEQCIGMwFLwnIYCYpWGBevsRloreuLkLJA76v+jfPfE+OpKCAiB4Fs4v21gt
+      PpNflxjeUOKG36wvLDEZkawR3dIONYSTtg==
+      -----END CERTIFICATE-----
+      -----BEGIN CERTIFICATE-----
+      MIIBNTCB3aADAgECAgEFMAoGCCqGSM49BAMCMCUxIzAhBgNVBAMTGkludGVybmFs
+      IFRlc3QgQ0EgTXVsdGkgVHdvMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAw
+      MFowJTEjMCEGA1UEAxMaSW50ZXJuYWwgVGVzdCBDQSBNdWx0aSBUd28wWTATBgcq
+      hkjOPQIBBggqhkjOPQMBBwNCAATmViQ+dFQQeCZzk6aXSJa9w0aq49e0u3cJS+lw
+      bubs6YQRJQGtAEC8DOG3wff1RL/X53+34VVNbxtUzqsLrJb6MAoGCCqGSM49BAMC
+      A0cAMEQCIE8MrTWhE00DkKFuvhVIX3p4UFl0usTAlSJVTtq03HRbAiATxnijnVne
+      zAE++6ABkzhzXh9isiBwxpQ3FQrwmalJxQ==
+      -----END CERTIFICATE-----

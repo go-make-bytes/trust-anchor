@@ -1,0 +1,6 @@
+# Fixture for TestLoadInternalUnknownType: the closed 11-value taxonomy
+# rejects everything else, including plausible-looking new values.
+anchors:
+  - name: "Unknown Type Anchor"
+    type: not_a_real_type
+    territory: LV

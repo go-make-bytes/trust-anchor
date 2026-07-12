@@ -20,24 +20,31 @@ const (
 )
 
 // bundleQuery reads the shared bundle filter parameters.
-func (r *router) bundleQuery(ctx *azugo.Context) (territories []string, use string, qscdOnly bool, ok bool) {
+func (r *router) bundleQuery(ctx *azugo.Context) (territories []string, use string, qscdOnly bool, anchorType string, ok bool) {
 	territories = ctx.Query.Values("territory")
 	if u := ctx.Query.StringOptional("use"); u != nil {
 		use = *u
 	}
 	if !trust.ValidUse(use) {
 		ctx.Error(azugo.ParamInvalidError{Name: "use", Tag: "oneof"})
-		return nil, "", false, false
+		return nil, "", false, "", false
+	}
+	if ty := ctx.Query.StringOptional("type"); ty != nil {
+		anchorType = *ty
+	}
+	if anchorType != "" && !trust.ValidAnchorType(anchorType) {
+		ctx.Error(azugo.ParamInvalidError{Name: "type", Tag: "oneof"})
+		return nil, "", false, "", false
 	}
 	q, err := ctx.Query.BoolOptional("qscdOnly")
 	if err != nil {
 		ctx.Error(azugo.ParamInvalidError{Name: "qscdOnly", Tag: "bool", Err: err})
-		return nil, "", false, false
+		return nil, "", false, "", false
 	}
 	if q != nil {
 		qscdOnly = *q
 	}
-	return territories, use, qscdOnly, true
+	return territories, use, qscdOnly, anchorType, true
 }
 
 // snapshotForServing returns the active snapshot or responds 503.
@@ -109,6 +116,7 @@ func setBundleHeaders(ctx *azugo.Context, snap *trust.Snapshot, stale bool) {
 // @param territory query string false "Comma-separated territory codes (e.g. LV,EE); default all"
 // @param use query string false "signature | authentication | seal | website"
 // @param qscdOnly query bool false "Only QCWithQSCD-qualified services"
+// @param type query string false "EUDI anchor type (see AnchorTypes); default legacy CA/QC (untyped) anchors only"
 // @success 200 string string "PEM bundle"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"
@@ -122,7 +130,7 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 	if snap == nil {
 		return
 	}
-	territories, use, qscdOnly, ok := r.bundleQuery(ctx)
+	territories, use, qscdOnly, anchorType, ok := r.bundleQuery(ctx)
 	if !ok {
 		return
 	}
@@ -134,9 +142,9 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 		return
 	}
 
-	anchors, err := trust.Filter(snap, territories, use, qscdOnly)
+	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType)
 	if err != nil {
-		ctx.Error(azugo.ParamInvalidError{Name: "use", Tag: "oneof"})
+		ctx.Error(filterParamError(anchorType))
 		return
 	}
 	ctx.ContentType(contentTypePEM)
@@ -151,6 +159,7 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 // @param territory query string false "Comma-separated territory codes"
 // @param use query string false "signature | authentication | seal | website"
 // @param qscdOnly query bool false "Only QCWithQSCD-qualified services"
+// @param type query string false "EUDI anchor type (see AnchorTypes); default legacy CA/QC (untyped) anchors only"
 // @success 200 AnchorsResponse response.Anchors "Bundle with metadata"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"
@@ -164,7 +173,7 @@ func (r *router) anchorsJSON(ctx *azugo.Context) {
 	if snap == nil {
 		return
 	}
-	territories, use, qscdOnly, ok := r.bundleQuery(ctx)
+	territories, use, qscdOnly, anchorType, ok := r.bundleQuery(ctx)
 	if !ok {
 		return
 	}
@@ -176,10 +185,21 @@ func (r *router) anchorsJSON(ctx *azugo.Context) {
 		return
 	}
 
-	anchors, err := trust.Filter(snap, territories, use, qscdOnly)
+	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType)
 	if err != nil {
-		ctx.Error(azugo.ParamInvalidError{Name: "use", Tag: "oneof"})
+		ctx.Error(filterParamError(anchorType))
 		return
 	}
 	ctx.JSON(response.NewAnchors(snap, anchors, stale))
+}
+
+// filterParamError attributes a trust.Filter error to the query parameter
+// that caused it. bundleQuery already validates both use and type before
+// Filter is ever called, so this path is defensive (unreachable in
+// practice) rather than load-bearing.
+func filterParamError(anchorType string) error {
+	if anchorType != "" && !trust.ValidAnchorType(anchorType) {
+		return azugo.ParamInvalidError{Name: "type", Tag: "oneof"}
+	}
+	return azugo.ParamInvalidError{Name: "use", Tag: "oneof"}
 }

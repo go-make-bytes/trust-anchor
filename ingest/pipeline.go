@@ -31,7 +31,10 @@ type Config struct {
 	ActivationMode   string
 	HoldAutoRelease  time.Duration
 	ExtraAnchorsPath string
-	OJNoticeURL      string
+	// InternalTrustSource is the optional operator-declared anchor file
+	// (INTERNAL_TRUST_SOURCE, trust.LoadInternal). Empty means none configured.
+	InternalTrustSource string
+	OJNoticeURL         string
 	// BootstrapAutoApprove activates an EU-API-fetched first bootstrap without
 	// operator approval (first-install convenience; see Manager.Initialize).
 	BootstrapAutoApprove bool
@@ -120,6 +123,21 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 		return nil, fmt.Errorf("ingest: load extra anchors overlay: %w", err)
 	}
 	next.Overlay = overlay
+
+	// Operator-declared internal anchors (INTERNAL_TRUST_SOURCE). Unlike the
+	// overlay/territories, a bad edit here never fails the whole cycle: the
+	// previous internal set is carried over (TA-D10 posture) and an event is
+	// emitted — an operator typo in this file must not take down ingestion.
+	internalAnchors, err := trust.LoadInternal(p.cfg.InternalTrustSource, now)
+	if err != nil {
+		p.events.InternalSourceError(nil, err)
+		p.log.Warn("internal trust source failed to load — carrying over last good set", zap.Error(err))
+		if prev != nil {
+			next.Internal = prev.Internal
+		}
+	} else {
+		next.Internal = internalAnchors
+	}
 
 	p.applyHoldMode(prev, next, now)
 
@@ -320,6 +338,12 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		NextUpdate:   tl.SchemeInformation.NextUpdate.DateTime,
 		SourceDigest: sha256hex(raw), // == published .sha2; drives next cycle's skip (P2)
 		Anchors:      anchors,
+	}
+	// Stamp every TL-sourced anchor with the territory's TLSequence (T1:
+	// additive Anchor.TLSequence). Overlay/internal anchors are never routed
+	// through this path and keep the zero value.
+	for i := range t.Anchors {
+		t.Anchors[i].TLSequence = int64(t.TLSequence)
 	}
 	if t.StaleAt(now, p.cfg.StaleGrace) {
 		p.events.Stale(nil, code, *t.NextUpdate)

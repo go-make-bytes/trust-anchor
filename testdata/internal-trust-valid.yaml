@@ -1,0 +1,31 @@
+# Fixture for TestLoadInternalValid: two full-featured entries covering both
+# certificate sources (inline PEM + certificateFile), lower-case territory
+# (must be upper-cased), an omitted status (defaults to the granted URI),
+# useCases carried through, and a validUntil declared LATER than the second
+# entry's certificate NotAfter (must be capped to the certificate's NotAfter).
+# Certificates are throwaway ECDSA P-256 self-signed test certs generated for
+# this fixture only — never production trust material.
+anchors:
+  - name: "Internal Test CA One"
+    type: pid_provider
+    territory: lv
+    useCases:
+      - pid-issuance
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBKjCB0aADAgECAgEBMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMTFEludGVybmFs
+      IFRlc3QgQ0EgT25lMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEd
+      MBsGA1UEAxMUSW50ZXJuYWwgVGVzdCBDQSBPbmUwWTATBgcqhkjOPQIBBggqhkjO
+      PQMBBwNCAARJDZ2MSeXpWnjKmKBX+gVXH9G8RLCsuCR6D9xkpMHHOOVdQS/ien8l
+      t9ZIcdtDXCOtruMthLFxb/zNtJ2DoKQRMAoGCCqGSM49BAMCA0gAMEUCIGm8VzIq
+      3GWAoclhLI6wKjgV3tFsu7faKU4Ou5y44ZXYAiEA9q13QOWzseqWzpX0yRwABd6g
+      n/nizS7hefaHu9j6dHQ=
+      -----END CERTIFICATE-----
+  - name: "Internal Test CA Two"
+    type: qeaa_provider
+    territory: EU
+    validUntil: 2032-01-01T00:00:00Z
+    certificateFile: internal-ca-two.pem
+    useCases:
+      - qeaa-a
+      - qeaa-b

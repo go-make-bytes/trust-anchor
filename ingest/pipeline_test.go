@@ -174,6 +174,18 @@ func TestRefreshFullCycle(t *testing.T) {
 	if lv.TLSequence != 51 || ee.TLSequence != 73 {
 		t.Errorf("TL sequences LV=%d EE=%d, want 51/73", lv.TLSequence, ee.TLSequence)
 	}
+	// Every TL-sourced anchor is stamped with its territory's TLSequence
+	// (T1: additive Anchor.TLSequence field).
+	for _, a := range lv.Anchors {
+		if a.TLSequence != 51 {
+			t.Errorf("LV anchor %s TLSequence = %d, want 51", a.FingerprintSHA256, a.TLSequence)
+		}
+	}
+	for _, a := range ee.Anchors {
+		if a.TLSequence != 73 {
+			t.Errorf("EE anchor %s TLSequence = %d, want 73", a.FingerprintSHA256, a.TLSequence)
+		}
+	}
 	if snap.ID == "" {
 		t.Error("snapshot has no content hash")
 	}
@@ -435,6 +447,110 @@ func TestRefreshOverlay(t *testing.T) {
 	}
 	if !inDiff {
 		t.Error("overlay anchor missing from diff")
+	}
+}
+
+// internalYAMLFixture is a self-contained (inline PEM, no certificateFile
+// dependency) single-entry INTERNAL_TRUST_SOURCE file for ingest-level
+// tests. The certificate is a throwaway ECDSA P-256 self-signed test cert
+// (NotAfter 2035), never production trust material.
+const internalYAMLFixture = `anchors:
+  - name: "Ingest Test CA"
+    type: access_ca
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBKjCB0aADAgECAgEBMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMTFEludGVybmFs
+      IFRlc3QgQ0EgT25lMB4XDTI0MDEwMTAwMDAwMFoXDTM1MDEwMTAwMDAwMFowHzEd
+      MBsGA1UEAxMUSW50ZXJuYWwgVGVzdCBDQSBPbmUwWTATBgcqhkjOPQIBBggqhkjO
+      PQMBBwNCAARJDZ2MSeXpWnjKmKBX+gVXH9G8RLCsuCR6D9xkpMHHOOVdQS/ien8l
+      t9ZIcdtDXCOtruMthLFxb/zNtJ2DoKQRMAoGCCqGSM49BAMCA0gAMEUCIGm8VzIq
+      3GWAoclhLI6wKjgV3tFsu7faKU4Ou5y44ZXYAiEA9q13QOWzseqWzpX0yRwABd6g
+      n/nizS7hefaHu9j6dHQ=
+      -----END CERTIFICATE-----
+`
+
+// internalYAMLBad declares an unknown taxonomy type — a fail-closed
+// rejection of the whole file.
+const internalYAMLBad = "anchors:\n  - name: bad\n    type: not_a_type\n    territory: LV\n"
+
+func TestRefreshInternal(t *testing.T) {
+	p := testPipeline(t, newFixtureTransport(), ModeAuto)
+	p.cfg.InternalTrustSource = filepath.Join("..", "testdata", "internal-trust-valid.yaml")
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Internal) != 2 {
+		t.Fatalf("internal anchors = %d, want 2", len(snap.Internal))
+	}
+	for _, a := range snap.Internal {
+		if a.Source != trust.SourceInternal {
+			t.Errorf("internal anchor source = %q, want %q", a.Source, trust.SourceInternal)
+		}
+	}
+}
+
+// TestRefreshInternalCarriesOverOnError: a bad operator edit to
+// INTERNAL_TRUST_SOURCE must never adopt a partial/absent internal set — the
+// previous internal set is carried over and the cycle still succeeds.
+func TestRefreshInternalCarriesOverOnError(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "internal.yaml")
+	if err := os.WriteFile(path, []byte(internalYAMLFixture), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := testPipeline(t, newFixtureTransport(), ModeAuto)
+	p.cfg.InternalTrustSource = path
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	good, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(good.Internal) != 1 {
+		t.Fatalf("internal anchors = %d, want 1", len(good.Internal))
+	}
+
+	// Operator typo: an unknown type rejects the whole file.
+	if err := os.WriteFile(path, []byte(internalYAMLBad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	next, err := p.Refresh(context.Background(), good, boot)
+	if err != nil {
+		t.Fatalf("cycle failed instead of carrying over the internal set: %v", err)
+	}
+	if len(next.Internal) != 1 || next.Internal[0].FingerprintSHA256 != good.Internal[0].FingerprintSHA256 {
+		t.Fatalf("internal set not carried over: got %+v, want %+v", next.Internal, good.Internal)
+	}
+}
+
+// TestRefreshInternalErrorNoPreviousData: unlike a territory failure on the
+// very first run (which fails the whole cycle — no partial first snapshot
+// is ever served), an internal-source failure never blocks the cycle: there
+// is simply nothing to carry over yet, so the snapshot proceeds with no
+// internal anchors.
+func TestRefreshInternalErrorNoPreviousData(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "internal.yaml")
+	if err := os.WriteFile(path, []byte(internalYAMLBad), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	p := testPipeline(t, newFixtureTransport(), ModeAuto)
+	p.cfg.InternalTrustSource = path
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatalf("cycle failed on first-run internal source error: %v", err)
+	}
+	if len(snap.Internal) != 0 {
+		t.Errorf("internal anchors = %d, want 0", len(snap.Internal))
 	}
 }
 

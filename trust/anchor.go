@@ -17,7 +17,23 @@ import (
 const (
 	SourceTL      = "tl"
 	SourceOverlay = "manual-overlay"
+	// SourceInternal tags operator-declared anchors from INTERNAL_TRUST_SOURCE
+	// (PROPOSAL-internal-trust-source.md §3.2; DECISIONS TA-D17).
+	SourceInternal = "internal"
 )
+
+// AnchorTypes is the closed EUDI anchor-type taxonomy served via the
+// additive type= filter (consumer extension E3). Unknown values are
+// rejected everywhere (fail closed). Empty Type = legacy CA/QC anchor.
+var AnchorTypes = map[string]bool{
+	"pid_provider": true, "qeaa_provider": true, "pub_eaa_provider": true,
+	"eaa_provider": true, "wallet_provider": true, "access_ca": true,
+	"wrprc_issuer": true, "pid_provider_status": true, "qeaa_provider_status": true,
+	"pub_eaa_provider_status": true, "eaa_provider_status": true,
+}
+
+// ValidAnchorType reports whether t is a known EUDI anchor type.
+func ValidAnchorType(t string) bool { return AnchorTypes[t] }
 
 // Use names accepted by bundle filters. `authentication` is served as an
 // alias of `signature`: eID authentication certificates chain to the same
@@ -56,6 +72,14 @@ type Anchor struct {
 	// qualifiers (signature, seal, website). Empty means the service carries
 	// no Fore* qualifier and the anchor is included in ALL uses.
 	Uses []string `json:"uses,omitempty"`
+
+	// Type is the EUDI anchor type (AnchorTypes); "" = legacy CA/QC anchor.
+	Type string `json:"type,omitempty"`
+	// UseCases lists EAA use-case accreditation (consumer extension E2/GAP-04).
+	UseCases []string `json:"useCases,omitempty"`
+	// TLSequence is the sequence of the TL this anchor came from (0 = not
+	// TL-sourced: overlay/internal). Additive consumer field (wire tlSequence).
+	TLSequence int64 `json:"tlSequence,omitempty"`
 }
 
 // MatchesUse reports whether the anchor belongs in a bundle filtered by use.
@@ -190,6 +214,10 @@ type Snapshot struct {
 
 	Territories []*Territory `json:"territories"`
 	Overlay     []Anchor     `json:"overlay,omitempty"`
+	// Internal holds the operator-declared anchors from INTERNAL_TRUST_SOURCE
+	// (trust.LoadInternal). Like Overlay, these carry no upstream TL/XMLDSig
+	// chain and bypass hold mode — deploying the file IS the approval.
+	Internal []Anchor `json:"internal,omitempty"`
 
 	Pending          []PendingAnchor   `json:"pending,omitempty"`
 	PendingBootstrap *PendingBootstrap `json:"pendingBootstrap,omitempty"`
@@ -247,7 +275,11 @@ type idContent struct {
 	LOTLSequence uint64        `json:"lotlSequence"`
 	Territories  []idTerritory `json:"territories"`
 	Overlay      []idAnchor    `json:"overlay,omitempty"`
-	Pending      []string      `json:"pending,omitempty"`
+	// Internal projects Snapshot.Internal exactly like Overlay: additive,
+	// omitempty — a snapshot with no internal anchors serializes
+	// byte-identically to before this field existed (golden-ID stability).
+	Internal []idAnchor `json:"internal,omitempty"`
+	Pending  []string   `json:"pending,omitempty"`
 }
 
 type idTerritory struct {
@@ -262,6 +294,15 @@ type idAnchor struct {
 	QSCD        bool     `json:"qscd"`
 	Uses        []string `json:"uses,omitempty"`
 	Source      string   `json:"source"`
+
+	// Type/UseCases (T1): additive, omitempty — an anchor without them
+	// serializes byte-identically to before this field existed, so a legacy
+	// (untyped) snapshot's ID/ETag is unchanged. TLSequence is deliberately
+	// NOT projected here: the territory's TLSequence is already in
+	// idTerritory, and overlay/internal anchors are always 0 — adding it
+	// would change nothing but noise.
+	Type     string   `json:"type,omitempty"`
+	UseCases []string `json:"useCases,omitempty"`
 }
 
 // ComputeID computes and assigns the snapshot's content hash.
@@ -270,16 +311,20 @@ func (s *Snapshot) ComputeID() string {
 	for _, t := range s.Territories {
 		it := idTerritory{Code: t.Code, TLSequence: t.TLSequence}
 		for _, a := range t.Anchors {
-			it.Anchors = append(it.Anchors, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source})
+			it.Anchors = append(it.Anchors, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
 		}
 		sort.Slice(it.Anchors, func(i, j int) bool { return it.Anchors[i].Fingerprint < it.Anchors[j].Fingerprint })
 		content.Territories = append(content.Territories, it)
 	}
 	sort.Slice(content.Territories, func(i, j int) bool { return content.Territories[i].Code < content.Territories[j].Code })
 	for _, a := range s.Overlay {
-		content.Overlay = append(content.Overlay, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source})
+		content.Overlay = append(content.Overlay, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
 	}
 	sort.Slice(content.Overlay, func(i, j int) bool { return content.Overlay[i].Fingerprint < content.Overlay[j].Fingerprint })
+	for _, a := range s.Internal {
+		content.Internal = append(content.Internal, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
+	}
+	sort.Slice(content.Internal, func(i, j int) bool { return content.Internal[i].Fingerprint < content.Internal[j].Fingerprint })
 	for _, p := range s.Pending {
 		content.Pending = append(content.Pending, p.Anchor.FingerprintSHA256)
 	}

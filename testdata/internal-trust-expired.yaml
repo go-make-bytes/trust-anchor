@@ -1,0 +1,17 @@
+# Fixture for TestLoadInternalExpiredCert: a throwaway self-signed test
+# certificate whose NotAfter (2020-01-01) is in the past. Not production trust
+# material.
+anchors:
+  - name: "Expired Anchor"
+    type: access_ca
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      MIIBMzCB2aADAgECAgEDMAoGCCqGSM49BAMCMCMxITAfBgNVBAMTGEludGVybmFs
+      IFRlc3QgQ0EgRXhwaXJlZDAeFw0xODAxMDEwMDAwMDBaFw0yMDAxMDEwMDAwMDBa
+      MCMxITAfBgNVBAMTGEludGVybmFsIFRlc3QgQ0EgRXhwaXJlZDBZMBMGByqGSM49
+      AgEGCCqGSM49AwEHA0IABPjmcpIre7d4JXi2lYGwhYcjAZq68tf5WcRpAMaJq3vR
+      nbn+hkoYrxbXnSubK03qgsg2QP+zC/k12NoUQcG/7MMwCgYIKoZIzj0EAwIDSQAw
+      RgIhANJ17wD4UtqZS16iGuY25Bz5FOMNljPnGkLWlwyaxFY2AiEA1T4tR2eDmOHN
+      6IoAjRSM/2B/YeJcgWc9C7qb0dRuisw=
+      -----END CERTIFICATE-----
