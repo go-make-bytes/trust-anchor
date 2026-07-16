@@ -17,8 +17,7 @@ import (
 const (
 	SourceTL      = "tl"
 	SourceOverlay = "manual-overlay"
-	// SourceInternal tags operator-declared anchors from INTERNAL_TRUST_SOURCE
-	// (PROPOSAL-internal-trust-source.md §3.2; DECISIONS TA-D17).
+	// SourceInternal tags operator-declared anchors from INTERNAL_TRUST_SOURCE.
 	SourceInternal = "internal"
 )
 

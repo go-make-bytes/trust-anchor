@@ -133,7 +133,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 }
 
 // TestFilterIncludesInternal proves the merge point AND the type= exclusion
-// rule (proposal §3.3, DECISIONS.md D17) together: s.Internal is merged
+// rule together: s.Internal is merged
 // through the same matches() gate as Overlay, but a TYPED internal anchor
 // (Type: "pid_provider" here) is now excluded from the untyped (legacy)
 // bundle and served ONLY by its own type= query — closing the mid-plan leak
@@ -349,7 +349,7 @@ func TestComputeDiff(t *testing.T) {
 }
 
 // TestComputeDiffIncludesInternal proves ComputeDiff diffs s.Internal like
-// s.Overlay (PROPOSAL-internal-trust-source.md §3.2: internal anchors must
+// s.Overlay (internal anchors must
 // be included in ComputeID, ComputeDiff, and trust.anchor_change events).
 // prev/next differ by exactly one internal anchor; the diff must report it
 // as added (forward) / removed (reverse).

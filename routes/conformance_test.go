@@ -20,7 +20,7 @@ import (
 
 // conformanceSnapshot mixes legacy (untyped) CA/QC anchors, a TL-sourced
 // typed anchor, and Internal (operator-declared) typed anchors, proving the
-// type= exclusion rule (proposal §3.3) works across every merge source
+// type= exclusion rule works across every merge source
 // (territory, overlay, internal):
 //   - lv-legacy-ca / ee-legacy-ca: ordinary untyped CA/QC anchors (Type "").
 //   - ee-pid-tl: a TYPED anchor placed directly in a Territory — proves the
@@ -90,7 +90,7 @@ func conformanceApp(t *testing.T) *azugo.TestApp {
 }
 
 // TestAnchorsTypeFilter is the conformance test for the type= bundle filter
-// (T3, proposal §3.3): the exclusion rule — anchorType == "" serves ONLY
+// The exclusion rule — anchorType == "" serves ONLY
 // untyped (legacy CA/QC) anchors; anchorType != "" serves ONLY anchors of
 // exactly that type, from any merge source, still territory-filtered where
 // that structurally applies (Territory-sourced anchors); use/qscdOnly

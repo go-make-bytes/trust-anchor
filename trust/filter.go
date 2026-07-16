@@ -28,7 +28,7 @@ func ValidUse(use string) bool {
 // territories: territory codes to include (empty = all in the snapshot).
 // use: optional use filter (see ValidUses).
 // qscdOnly: only services qualified QCWithQSCD.
-// anchorType: the type= bundle filter (proposal §3.3 exclusion rule).
+// anchorType: the type= bundle filter (the exclusion rule).
 // anchorType == "" is the LEGACY view: only untyped anchors (Type == "") —
 // typed EUDI anchors never leak into existing consumers' bundles.
 // anchorType != "" returns ONLY anchors of exactly that type (from any
