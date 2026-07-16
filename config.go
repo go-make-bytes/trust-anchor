@@ -6,6 +6,7 @@ import (
 	"time"
 
 	azugocfg "azugo.io/azugo/config"
+	corecfg "azugo.io/core/config"
 	"azugo.io/core/validation"
 	"github.com/spf13/viper"
 
@@ -143,6 +144,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 
 	v.SetDefault("auth_mode", AuthModeDPoP)
 	_ = v.BindEnv("auth_mode", "AUTH_MODE")
+	loadSecret(v, "trust_admin_key", "TRUST_ADMIN_KEY")
 	_ = v.BindEnv("trust_admin_key", "TRUST_ADMIN_KEY")
 
 	v.SetDefault("lotl_url", "https://ec.europa.eu/tools/lotl/eu-lotl.xml")
@@ -176,9 +178,21 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("trust_snapshot_prefix", "TRUST_SNAPSHOT_PREFIX")
 	_ = v.BindEnv("trust_snapshot_use_ssl", "TRUST_SNAPSHOT_USE_SSL")
 	_ = v.BindEnv("trust_snapshot_dir", "TRUST_SNAPSHOT_DIR")
+	loadSecret(v, "trust_store_dsn", "TRUST_STORE_DSN")
 	_ = v.BindEnv("trust_store_dsn", "TRUST_STORE_DSN")
 	_ = v.BindEnv("trust_fetch_timeout", "TRUST_FETCH_TIMEOUT")
 	_ = v.BindEnv("max_tl_bytes", "MAX_TL_BYTES")
+}
+
+// loadSecret resolves a secret via the Vault-agent <NAME>_FILE convention (the
+// referenced file's content) and registers it as a viper default, so an explicit
+// plain <NAME> environment variable still overrides it. Used for the values that
+// carry credentials — the store DSN (its password) and the admin key — so they
+// can be delivered as mounted secret files rather than raw environment values.
+func loadSecret(v *viper.Viper, key, name string) {
+	if secret, err := corecfg.LoadRemoteSecret(name); err == nil && secret != "" {
+		v.SetDefault(key, secret)
+	}
 }
 
 // Validate validates the configuration.
