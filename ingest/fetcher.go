@@ -38,7 +38,7 @@ func NewFetcher(timeout time.Duration, maxSize int64, initialHosts ...string) *F
 	f := &Fetcher{
 		// TLS certificate verification is the default transport behaviour and
 		// must never be disabled here — these fetches define trust. The transport
-		// is otel-instrumented so LOTL/CELLAR/national-TL fetches show as client
+		// is otel-instrumented so LOTL/national-TL fetches show as client
 		// spans (no-op when tracing is inert). The correlation id is intentionally
 		// NOT propagated — these are external trust-list sources, not our services.
 		client:  &http.Client{Timeout: timeout, Transport: observability.InstrumentedTransport(nil)},

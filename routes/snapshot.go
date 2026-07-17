@@ -28,11 +28,11 @@ func (r *router) readyz(ctx *azugo.Context) {
 }
 
 // snapshot serves the current snapshot summary, the diff vs the previous
-// snapshot, the pending set and any staged bootstrap update.
+// snapshot and the pending set.
 //
 // @operationId GetSnapshot
 // @title Snapshot summary
-// @description Current snapshot summary + diff vs previous + pending additions + staged bootstrap update.
+// @description Current snapshot summary + diff vs previous + pending additions.
 // @success 200 SnapshotResponse response.Snapshot "Snapshot summary"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"

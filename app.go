@@ -108,11 +108,8 @@ func (a *App) init() error {
 		ActivationMode:       cfg.ActivationMode,
 		HoldAutoRelease:      cfg.HoldAutoRelease,
 		ExtraAnchorsPath:     cfg.ExtraAnchorsPath,
-		InternalTrustSource:  cfg.InternalTrustSource,
-		OJNoticeURL:          cfg.OJNoticeURL,
-		OJOnlineFetch:        cfg.OJOnlineFetch,
-		BootstrapAutoApprove: cfg.BootstrapAutoApprove,
-		StaleGrace:           cfg.StaleGrace,
+		InternalTrustSource: cfg.InternalTrustSource,
+		StaleGrace:          cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())
 	a.manager = ingest.NewManager(pipeline, a.store, a.events, a.Log())
 
@@ -136,7 +133,7 @@ func (a *App) init() error {
 // Start initializes persisted state (bootstrap + last snapshot) and starts
 // the server and background tasks.
 func (a *App) Start() error {
-	if err := a.manager.Initialize(a.BackgroundContext(), a.config.BootstrapCertsPath, a.config.OJPinnedReference); err != nil {
+	if err := a.manager.Initialize(a.BackgroundContext(), a.config.BootstrapCertsPath); err != nil {
 		return err
 	}
 	if snap := a.manager.Active(); snap == nil {

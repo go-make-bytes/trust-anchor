@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/gmb-sig/trust-anchor/tsl"
 )
@@ -33,6 +34,18 @@ func TestLoadBakedSignerManifest(t *testing.T) {
 		if len(c.Raw) == 0 {
 			t.Errorf("certificate %d has no DER bytes", i)
 		}
+	}
+
+	// SeedBootstrap reads the manifest's own oj_reference — no env var, no drift.
+	boot, err := SeedBootstrap(bakedManifest(), time.Now().UTC())
+	if err != nil {
+		t.Fatalf("SeedBootstrap(manifest): %v", err)
+	}
+	if boot.OJReference != "C/2026/1944" {
+		t.Errorf("bootstrap OJReference = %q, want C/2026/1944 (from the manifest)", boot.OJReference)
+	}
+	if len(boot.CertsDER) != 6 {
+		t.Errorf("bootstrap certs = %d, want 6", len(boot.CertsDER))
 	}
 }
 
@@ -77,6 +90,15 @@ func TestLoadCertsFromPathPEMBackCompat(t *testing.T) {
 	if len(got) != 1 || string(got[0].Raw) != string(certs[0].Raw) {
 		t.Fatalf("PEM round-trip: got %d certs, want the single re-encoded one", len(got))
 	}
+
+	// A plain PEM carries no manifest → the bootstrap records no OJ reference.
+	boot, err := SeedBootstrap(pemPath, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("SeedBootstrap(pem): %v", err)
+	}
+	if boot.OJReference != "" {
+		t.Errorf("PEM bootstrap OJReference = %q, want empty", boot.OJReference)
+	}
 }
 
 // TestLoadManifestByContentSniff: a manifest whose path carries no decisive
@@ -116,7 +138,7 @@ func TestLoadSignerManifestFailClosed(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			certs, err := loadSignerManifest([]byte(tc.yaml))
+			certs, _, err := loadSignerManifest([]byte(tc.yaml))
 			if err == nil {
 				t.Fatalf("loadSignerManifest(%s): got nil error, want failure", tc.name)
 			}

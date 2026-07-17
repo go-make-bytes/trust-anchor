@@ -34,17 +34,6 @@ type Config struct {
 	// InternalTrustSource is the optional operator-declared anchor file
 	// (INTERNAL_TRUST_SOURCE, trust.LoadInternal). Empty means none configured.
 	InternalTrustSource string
-	OJNoticeURL         string
-	// OJOnlineFetch enables fetching the OJ signer-certificate notice online
-	// (the CELLAR/ELI endpoints): the first-install auto-seed and the per-cycle
-	// rotation watch. Default OFF — the published OJ notice is not reliably
-	// fetchable for automation, so the signer set is pinned locally via
-	// LOTL_BOOTSTRAP_CERTS_PATH and the service never depends on that network
-	// path. Opt in only where a reachable notice source is configured.
-	OJOnlineFetch bool
-	// BootstrapAutoApprove activates an EU-API-fetched first bootstrap without
-	// operator approval (first-install convenience; see Manager.Initialize).
-	BootstrapAutoApprove bool
 	// StaleGrace is the grace period past a list's NextUpdate before its data
 	// is flagged stale (served with a warning, never dropped).
 	StaleGrace time.Duration
@@ -104,17 +93,6 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 	}
 	for _, c := range signers {
 		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
-	}
-
-	// OJ watch: detect + fetch + stage, never activate. Off unless the online
-	// OJ fetch is explicitly enabled — with a locally pinned signer set the
-	// service must not reach out to the (unreliable) notice endpoints.
-	if p.cfg.OJOnlineFetch {
-		var prevStaged *trust.PendingBootstrap
-		if prev != nil {
-			prevStaged = prev.PendingBootstrap
-		}
-		next.PendingBootstrap = p.stageBootstrapUpdate(ctx, next.AdvertisedOJ, boot, prevStaged, now)
 	}
 
 	// National trusted lists.
@@ -184,24 +162,12 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 		maxPivot = refs[len(refs)-1].seq
 	}
 
-	// Signer-set precedence: normally continue from the previous snapshot's
-	// (pivot-rotated) signer set. EXCEPTION — when the operator has activated a
-	// NEWER bootstrap since that snapshot was taken (boot.Version advanced),
-	// the freshly approved OJEU set takes precedence and the pivot position
-	// resets: the bootstrap-approval path exists for disaster recovery, where
-	// the previous signers may be compromised yet still cryptographically able
-	// to verify an attacker's LOTL. Without this reset the new bootstrap would
-	// never take effect.
+	// Signer-set precedence: continue from the previous snapshot's
+	// (pivot-rotated) signer set when one exists; otherwise start from the
+	// operator-pinned bootstrap set.
 	var signers []*x509.Certificate
 	var pivotSeq uint64
 	switch {
-	case prev != nil && boot.Version > prev.BootstrapVersion:
-		p.log.Info("newer approved bootstrap supersedes previous snapshot signers",
-			zap.Int("bootstrap_version", boot.Version),
-			zap.Int("previous_version", prev.BootstrapVersion),
-			zap.String("oj_reference", boot.OJReference))
-		signers, err = boot.Certificates()
-		pivotSeq = 0
 	case prev != nil && len(prev.LOTLSignersDER) > 0:
 		signers, err = prev.LOTLSigners()
 		pivotSeq = prev.LOTLPivotSeq

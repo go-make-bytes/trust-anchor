@@ -20,7 +20,6 @@ flowchart TB
         LOTL["EU LOTL + pivots"]
         LV["LV trusted list (TS 119 612)"]
         EE["EE trusted list (TS 119 612)"]
-        OJ["OJ notice (CELLAR / ELI)"]
     end
 
     subgraph TA["trust-anchor service"]
@@ -29,7 +28,6 @@ flowchart TB
         VERIFY["verify XMLDSig vs pinned signers (tsl)"]
         EXTRACT["extract CA/QC anchors + qualifications"]
         SNAP["snapshot (content hash) + diff + governance"]
-        OJWATCH["OJ watch → staged bootstrap (never auto)"]
         MGR["ingest.Manager · active snapshot (atomic swap)"]
         STORE[("store.Store · S3 / FS / memory / Postgres — versioned + latest")]
         REFRESH["tasks.Refresh · every 6h / NextUpdate / kick"]
@@ -37,7 +35,6 @@ flowchart TB
         API["API · azugo + go-authbyte DPoP (svc:trust-anchor)"]
 
         FETCH --> VERIFY --> EXTRACT --> SNAP --> MGR
-        OJWATCH --> SNAP
         MGR <--> STORE
         REFRESH -. kick .-> FETCH
         SNAP --> EVENTS
@@ -47,16 +44,16 @@ flowchart TB
     LOTL --> FETCH
     LV --> FETCH
     EE --> FETCH
-    OJ --> OJWATCH
+    BOOTSTRAP[["operator-pinned LOTL signer set (lotl-signers.yaml, baked)"]] --> VERIFY
 
     API -->|"GET /v1/anchors (PEM, ETag) · 304 on If-None-Match"| WEBEID["webeid-service (init / poll)"]
-    OPS["ops (trust:admin)"] -->|"approve bootstrap / pending · refresh"| API
+    OPS["ops (trust:admin)"] -->|"approve pending · refresh"| API
     EVENTS --> SIEM[["SIEM"]]
 ```
 
 **Trust model.** Trusted-list signatures are verified against *pinned*
 expected signer certificates, never via chain building: the LOTL against the
-operator-approved OJEU bootstrap set plus accumulated pivot rotations; each
+operator-pinned OJEU bootstrap set plus accumulated pivot rotations; each
 national TL against the signer certificates carried in its (verified) LOTL
 pointer. Only signature-verified bytes are ever parsed for trust decisions.
 The one unacceptable failure mode is serving unverified anchors; serving
@@ -70,7 +67,7 @@ procedures, migration in `authbyte-db/trust-anchor/`; see DECISIONS D3/D15 and
 
 Package map: [`tsl/`](tsl) TS 119 612 parsing + XMLDSig verification ·
 [`trust/`](trust) domain (anchors, snapshots, diff, filters, overlay, internal source) ·
-[`ingest/`](ingest) fetcher/pipeline/pivots/OJ-watch/manager ·
+[`ingest/`](ingest) fetcher/pipeline/pivots/manager ·
 [`store/`](store) S3 / fs / memory / postgres snapshot stores · [`tasks/`](tasks)
 refresh job · [`routes/`](routes) API. XMLDSig verification uses
 `lafriks/go-xmldsig/v2`. Key design notes in [DECISIONS.md](DECISIONS.md) —
@@ -89,9 +86,8 @@ way, only how a request earns them differs.
 |---|---|---|---|
 | GET | `/v1/anchors?territory=LV,EE&use=signature&qscdOnly=true&type=pid_provider` | trust:read | PEM bundle (`application/x-pem-file`). Strong `ETag` = snapshot id, honors `If-None-Match` → 304. Headers `X-Trust-Snapshot`, `X-Trust-Stale`. `type=` is additive (see [Internal trust source](#internal-trust-source--operator-declared-eudi-anchors)); omitted ⇒ legacy untyped anchors only |
 | GET | `/v1/anchors.json` (same filters) | trust:read | base64-DER certs + TSP/service metadata, qualifications, fingerprints, plus `type`/`useCases`/`tlSequence` when set |
-| GET | `/v1/snapshot` | trust:read | snapshot summary + diff vs previous + pending set + staged bootstrap + `overlayCount`/`internalCount` |
+| GET | `/v1/snapshot` | trust:read | snapshot summary + diff vs previous + pending set + `overlayCount`/`internalCount` |
 | POST | `/v1/pending/{fingerprint}/approve` | trust:admin | approve a held addition (hold mode) |
-| POST | `/v1/bootstrap/approve` `{"ojReference":"C/2026/1944"}` | trust:admin | activate the staged OJ bootstrap update (§ runbook) |
 | POST | `/v1/refresh` | trust:admin | run an immediate ingestion cycle (also re-reads `INTERNAL_TRUST_SOURCE`) |
 | GET | `/healthz`, `/readyz` | none | readiness = a valid snapshot is loaded |
 
@@ -207,8 +203,8 @@ only how a request earns a scope differs.
   unnecessary ceremony:
   - **Read endpoints** (`/v1/anchors`, `/v1/anchors.json`, `/v1/snapshot`)
     are anonymous — every request is granted `trust:read`.
-  - **Admin endpoints** (`/v1/refresh`, `/v1/pending/{fp}/approve`,
-    `/v1/bootstrap/approve`) additionally require a header
+  - **Admin endpoints** (`/v1/refresh`, `/v1/pending/{fp}/approve`)
+    additionally require a header
     `X-API-Key: $TRUST_ADMIN_KEY`, compared constant-time
     (`crypto/subtle.ConstantTimeCompare`). A missing or wrong key is denied
     through the **same `requireScope` → 403 path** used for an ordinary scope
@@ -239,10 +235,7 @@ and dropping its cold-start-allowed flag).
 | Env | Default | Purpose |
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists |
-| `LOTL_BOOTSTRAP_CERTS_PATH` | — | OJEU-published LOTL signer certs (PEM file/dir) — operator-pinned **first-install seed** (highest precedence); afterwards the approved store is authoritative |
-| `OJ_PINNED_REFERENCE` | — | OJ notice to trust, e.g. `C/2026/1944`. Used as the seed's reference, **and** (when no cert path is pinned) as the notice fetched from the EU CELLAR API at first install |
-| `OJ_NOTICE_URL` | — | optional CELLAR/ELI URL override for the OJ-API fetch (watch + first-install) |
-| `TRUST_BOOTSTRAP_AUTO_APPROVE` | `false` | first-install only: when no cert path is pinned, fetch `OJ_PINNED_REFERENCE` from the EU CELLAR API and — if `true` — activate it immediately (dev/CI). `false` fetches, logs the fingerprints, and fails closed pending operator review |
+| `LOTL_BOOTSTRAP_CERTS_PATH` | baked `/etc/trust-anchor/lotl-signers.yaml` | OJEU-published LOTL signer set — the operator-pinned **first-install seed** (a `lotl-signers.yaml` manifest, which also carries its own OJ reference, or a PEM/DER file/dir). The image bakes a default, so a normal deploy needs no trust config; afterwards the persisted store is authoritative and the path is ignored |
 | `TRUST_TERRITORIES` | `LV,EE` | national lists to ingest |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | accepted service statuses (names or full URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | refresh cadence (earliest TL `NextUpdate` is honored too) |
@@ -259,10 +252,9 @@ and dropping its cold-start-allowed flag).
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` | — / `svc:trust-anchor` | go-authbyte inbound validation (plus standard `DPOP_*` vars); consulted only when `AUTH_MODE=dpop` |
 | `TRUST_ADMIN_KEY` | — | `AUTH_MODE=internal` only: the `X-API-Key` value that grants `trust:admin`. **Secret** — required (boot fails closed if empty), never logged |
 
-Egress: exactly the LOTL host, the TL hosts discovered from the verified
-LOTL, and the OJ notice host — https only, TLS verified, size-capped. Any
-non-https pointer raises `egress.violation` and the territory falls back to
-its last good data.
+Egress: exactly the LOTL host and the TL hosts discovered from the verified
+LOTL — https only, TLS verified, size-capped. Any non-https pointer raises
+`egress.violation` and the territory falls back to its last good data.
 
 ## Registry additions (authbyte-core/registry.yaml)
 
@@ -281,53 +273,37 @@ its last good data.
       scopes: [trust:read, trust:admin]
 ```
 
-## OJEU bootstrap-certificate procedure
+## LOTL signer set (bootstrap) — pinning + rotation
 
-The LOTL signer certificates published in the EU Official Journal are the
-root of the whole trust tree. The service fetches updates automatically but
-**never activates them automatically** (one poisoned fetch must not swap the
-root — DSS's pinned `oj-keystore` is the precedent). Expected frequency:
-every few years; pivots rotate signers automatically in between.
+The LOTL signer certificates published in the EU Official Journal are the root
+of the whole trust tree. They are **operator-pinned**, never fetched at
+runtime: the published OJ notice (eur-lex/CELLAR) is not reliably reachable for
+automation, so the service depends on no such fetch. The set is a
+`lotl-signers.yaml` manifest managed under [`trust-config/`](trust-config)
+(certs + a generator + provenance notes); the image bakes it and defaults
+`LOTL_BOOTSTRAP_CERTS_PATH` to it.
 
-**First install — option A: operator-pinned certs (strongest)**
+**First install.** Nothing to configure — the baked manifest seeds bootstrap
+**v1** on first start (empty store), which is then persisted and authoritative.
+To pin a different set, mount a manifest (or PEM/DER file/dir) and point
+`LOTL_BOOTSTRAP_CERTS_PATH` at it; a manifest carries its own `oj_reference`,
+so nothing else need be set.
 
-1. Open the current OJ notice (the LOTL advertises it; today
-   `https://eur-lex.europa.eu/eli/C/2026/1944/oj`).
-2. Copy the certificates into a PEM file; deploy as
-   `LOTL_BOOTSTRAP_CERTS_PATH`, set `OJ_PINNED_REFERENCE=C/2026/1944`.
-3. Start the service — it persists the set as bootstrap **v1** and the path
-   is ignored from then on.
+**Rotation** — expected only every few years; the pivot chain rotates signers
+automatically in between (verified against the current set), so the pinned root
+changes rarely. The snapshot's `advertisedOj` (from `GET /v1/snapshot`) is the
+signal: when it names an OJ reference newer than the pinned set, a fresh signer
+set has been published. To adopt it:
 
-**First install — option B: fetch the OJ notice from the EU CELLAR API**
-
-When no `LOTL_BOOTSTRAP_CERTS_PATH` is pinned but `OJ_PINNED_REFERENCE` is set,
-the service fetches that notice from the CELLAR API (same fetch/extract as the
-OJ watch) and seeds bootstrap **v1** from it — the pin is on the OJ *reference*,
-not the cert bytes. Activation is gated by `TRUST_BOOTSTRAP_AUTO_APPROVE`:
-
-- `true` — activate immediately (dev/CI; requires outbound network to
-  `publications.europa.eu`).
-- `false` (default) — fetch, **log the fingerprints**, and fail closed; review
-  them against the OJ notice, then set `TRUST_BOOTSTRAP_AUTO_APPROVE=true` (or
-  pin the certs via option A) to activate. Keeps an operator in the trust-root
-  loop (DECISIONS D6).
-
-**When `trust.bootstrap_review_needed` fires** (a new OJ reference was
-detected and the notice fetched + staged):
-
-1. `GET /v1/snapshot` → `pendingBootstrap`: OJ reference, subjects, SHA-256
-   fingerprints, diff vs the active set.
-2. Open the published OJ document **out-of-band** (browser, the official OJ
-   PDF) and compare every fingerprint.
-3. `POST /v1/bootstrap/approve` with `{"ojReference":"<the reference>"}` —
-   one click activates, persists the versioned set, and triggers
-   re-verification. A mismatched reference is refused.
-
-If the OJ reference changes but staging does not appear: the automated fetch
-failed (eur-lex sits behind a WAF; CELLAR negotiation is environment-dependent
-— DECISIONS D5). Set `OJ_NOTICE_URL` to a reachable copy, or in the worst
-case rotate via a maintenance redeploy of the seed path with a fresh
-`OJ_PINNED_REFERENCE` against an empty bootstrap store.
+1. Obtain the new signer certificates from the current OJ notice and confirm
+   each SHA-256 against the DSS oj-certificates service — see
+   [`trust-config/README.md`](trust-config/README.md).
+2. Update `trust-config/` (drop the PEMs in, regenerate `lotl-signers.yaml`,
+   review, commit) and rebuild the image — or mount the updated manifest for an
+   urgent change ahead of a rebuild.
+3. The persisted store is authoritative after first install, so the updated
+   manifest re-seeds only against an empty bootstrap store: redeploy with the
+   bootstrap store cleared so the new set persists as the current **v1**.
 
 ## Ops runbook
 
@@ -367,9 +343,10 @@ go vet ./...
 go test -race -count=1 ./...          # fixtures only — hermetic
 go test -tags live ./ingest/ -v       # live network (manual)
 
-# local run without S3:
+# local run without S3 (the image bakes lotl-signers.yaml; override the path to
+# use your own manifest/PEM):
 TRUST_SNAPSHOT_DIR=./.snapshots \
-LOTL_BOOTSTRAP_CERTS_PATH=./bootstrap.pem OJ_PINNED_REFERENCE=C/2026/1944 \
+LOTL_BOOTSTRAP_CERTS_PATH=./trust-config/lotl-signers.yaml \
 AUTH_ISSUER_URL=http://localhost:8080 SERVICE_AUDIENCE=svc:trust-anchor \
 go run ./cmd/server web
 ```
@@ -378,5 +355,5 @@ Docker build context is **this module directory** (no local `replace`s — the
 `gmb-sig/*` deps are fetched from the network at their tags): from `trust-anchor/`,
 `docker build -t trust-anchor:dev .`. In the local stack it's built + run via
 [`sign-portal/docker-compose.yml`](../docker-compose.yml) (see `RUN-LOCAL.md`),
-where first-install seeds the bootstrap from `LOTL_BOOTSTRAP_CERTS_PATH` (or the
-EU CELLAR API, gated by `TRUST_BOOTSTRAP_AUTO_APPROVE`).
+where first-install seeds the bootstrap from `LOTL_BOOTSTRAP_CERTS_PATH` (the
+baked `lotl-signers.yaml` by default).

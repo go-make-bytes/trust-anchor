@@ -23,16 +23,6 @@ type Refresher interface {
 	Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error)
 }
 
-// ojBootstrapSeeder is optionally implemented by the pipeline (*Pipeline does):
-// it fetches the first-install bootstrap certificates from the EU OJ/CELLAR API
-// for a pinned OJ reference, returning the candidate bootstrap and the
-// configured auto-approve flag. Manager.Initialize consults it (via type
-// assertion) only when the store has no bootstrap and no cert path is pinned, so
-// test fakes that implement just Refresher are unaffected.
-type ojBootstrapSeeder interface {
-	FetchFirstBootstrap(ctx context.Context, ojRef string, now time.Time) (*trust.Bootstrap, bool, error)
-}
-
 // Manager owns the active snapshot and bootstrap state: startup bootstrap
 // from the store, refresh cycles (fail-safe: a failed cycle never replaces
 // the last good snapshot), hold-mode approvals and bootstrap activation.
@@ -63,50 +53,27 @@ func NewManager(pipeline Refresher, st store.Store, ev *events.Emitter, log *zap
 }
 
 // Initialize loads the persisted bootstrap + snapshot. When the store has no
-// bootstrap yet, the operator-pinned seed (LOTL_BOOTSTRAP_CERTS_PATH +
-// OJ_PINNED_REFERENCE) is required and persisted as version 1; afterwards the
-// approved store is authoritative and the path is ignored.
-func (m *Manager) Initialize(ctx context.Context, seedPath, seedOJRef string) error {
+// bootstrap yet, the operator-pinned seed (LOTL_BOOTSTRAP_CERTS_PATH — a signer
+// manifest that carries its own OJ reference, or a PEM/DER path) is required
+// and persisted as version 1; afterwards the store is authoritative and the
+// path is ignored.
+func (m *Manager) Initialize(ctx context.Context, seedPath string) error {
 	boot, err := m.store.LoadLatestBootstrap(ctx)
 	if err != nil {
 		return fmt.Errorf("ingest: load bootstrap from store: %w", err)
 	}
 	if boot == nil {
-		switch {
-		case seedPath != "":
-			// Operator-pinned cert bytes (strongest): seed from the PEM/DER path.
-			boot, err = trust.SeedBootstrap(seedPath, seedOJRef, time.Now().UTC())
-			if err != nil {
-				return err
-			}
-			m.log.Info("seeded OJEU bootstrap from pinned certs (LOTL_BOOTSTRAP_CERTS_PATH)",
-				zap.String("oj_reference", boot.OJReference),
-				zap.Strings("fingerprints", boot.Fingerprints()))
-		case seedOJRef != "":
-			// Fetch the pinned OJ notice from the EU CELLAR API (the designed path).
-			seeder, ok := m.pipeline.(ojBootstrapSeeder)
-			if !ok {
-				return fmt.Errorf("ingest: OJ bootstrap fetch is not supported by the configured pipeline")
-			}
-			fetched, autoApprove, ferr := seeder.FetchFirstBootstrap(ctx, seedOJRef, time.Now().UTC())
-			if ferr != nil {
-				return fmt.Errorf("ingest: fetch first bootstrap from OJ API: %w", ferr)
-			}
-			if !autoApprove {
-				// Operator-gated: surface the fingerprints for out-of-band review,
-				// then fail closed — nothing is persisted or trusted.
-				m.log.Warn("fetched OJEU bootstrap from the EU API — NOT activated (operator approval required)",
-					zap.String("oj_reference", fetched.OJReference),
-					zap.Strings("fingerprints", fetched.Fingerprints()))
-				return fmt.Errorf("ingest: fetched OJEU bootstrap %s from the EU API but TRUST_BOOTSTRAP_AUTO_APPROVE is false — review the logged fingerprints against the OJ notice, then set TRUST_BOOTSTRAP_AUTO_APPROVE=true (or pin the certs via LOTL_BOOTSTRAP_CERTS_PATH) to activate", fetched.OJReference)
-			}
-			boot = fetched
-			m.log.Info("fetched and auto-approved OJEU bootstrap from the EU API",
-				zap.String("oj_reference", boot.OJReference),
-				zap.Strings("fingerprints", boot.Fingerprints()))
-		default:
-			return fmt.Errorf("ingest: no bootstrap in store and neither LOTL_BOOTSTRAP_CERTS_PATH nor OJ_PINNED_REFERENCE configured — one is required at first install")
+		if seedPath == "" {
+			return fmt.Errorf("ingest: no bootstrap in store and no LOTL_BOOTSTRAP_CERTS_PATH configured — the operator-pinned signer set is required at first install")
 		}
+		// Operator-pinned signer set: seed from the pinned manifest/PEM path.
+		boot, err = trust.SeedBootstrap(seedPath, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		m.log.Info("seeded LOTL bootstrap from pinned certs (LOTL_BOOTSTRAP_CERTS_PATH)",
+			zap.String("oj_reference", boot.OJReference),
+			zap.Strings("fingerprints", boot.Fingerprints()))
 		if err := m.store.SaveBootstrap(ctx, boot); err != nil {
 			return fmt.Errorf("ingest: persist seeded bootstrap: %w", err)
 		}
@@ -175,7 +142,6 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 	changed := prev == nil ||
 		next.ID != prev.ID ||
 		!pendingEqual(prev.Pending, next.Pending) ||
-		!pendingBootstrapEqual(prev.PendingBootstrap, next.PendingBootstrap) ||
 		carriedOverChanged(prev, next)
 
 	if changed {
@@ -266,55 +232,6 @@ func (m *Manager) ApprovePending(ctx *azugo.Context, fingerprint, actor string) 
 	return next, nil
 }
 
-// ApproveBootstrap activates the staged OJ bootstrap update after the
-// operator verified the fingerprints against the published OJ document
-// out-of-band. ojReference must match the staged reference — approving a set
-// other than the one reviewed is refused.
-func (m *Manager) ApproveBootstrap(ctx *azugo.Context, ojReference, actor string) (*trust.Bootstrap, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	cur := m.active.Load()
-	if cur == nil || cur.PendingBootstrap == nil {
-		return nil, fmt.Errorf("ingest: no staged bootstrap update")
-	}
-	staged := cur.PendingBootstrap
-	if staged.OJReference != ojReference {
-		return nil, fmt.Errorf("ingest: staged bootstrap is %s, not %s", staged.OJReference, ojReference)
-	}
-
-	prevBoot := m.bootstrap.Load()
-	next := &trust.Bootstrap{
-		Version:     prevBoot.Version + 1,
-		OJReference: staged.OJReference,
-		CertsDER:    staged.CertsDER,
-		ActivatedAt: time.Now().UTC(),
-	}
-
-	dctx := detach(ctx)
-	if err := m.store.SaveBootstrap(dctx, next); err != nil {
-		return nil, fmt.Errorf("ingest: persist bootstrap: %w", err)
-	}
-	m.bootstrap.Store(next)
-
-	snap, err := cloneSnapshot(cur)
-	if err != nil {
-		return nil, err
-	}
-	snap.PendingBootstrap = nil
-	snap.BootstrapOJRef = next.OJReference
-	snap.BootstrapVersion = next.Version
-	if err := m.store.SaveSnapshot(dctx, snap); err != nil {
-		m.log.Error("snapshot persistence after bootstrap activation failed", zap.Error(err))
-	}
-	m.active.Store(snap)
-
-	m.events.BootstrapActivated(ctx, next.OJReference, next.Version, actor)
-	// Re-verify the tree against the new root soon.
-	m.TriggerRefresh()
-	return next, nil
-}
-
 // detach derives a cancellation-free context from a (possibly nil, possibly
 // pooled) request context — persistence must never be cancelled by a
 // disconnecting client, and timeout watchers must not race pooled contexts.
@@ -345,24 +262,6 @@ func pendingEqual(a, b []trust.PendingAnchor) bool {
 	}
 	for i := range a {
 		if a[i].Anchor.FingerprintSHA256 != b[i].Anchor.FingerprintSHA256 || a[i].Anchor.Territory != b[i].Anchor.Territory {
-			return false
-		}
-	}
-	return true
-}
-
-func pendingBootstrapEqual(a, b *trust.PendingBootstrap) bool {
-	if (a == nil) != (b == nil) {
-		return false
-	}
-	if a == nil {
-		return true
-	}
-	if a.OJReference != b.OJReference || len(a.Fingerprints) != len(b.Fingerprints) {
-		return false
-	}
-	for i := range a.Fingerprints {
-		if a.Fingerprints[i] != b.Fingerprints[i] {
 			return false
 		}
 	}

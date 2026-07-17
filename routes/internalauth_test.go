@@ -54,7 +54,7 @@ func testInternalApp(t *testing.T, adminKey string) (*azugo.TestApp, *trustancho
 	qt.Assert(t, qt.IsNil(app.Store().SaveBootstrap(ctx, &trust.Bootstrap{
 		Version: 1, OJReference: "C/2026/1944", ActivatedAt: time.Now().UTC(), Seeded: true,
 	})))
-	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "", "")))
+	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "")))
 
 	// Never let route tests hit the network.
 	app.Manager().SetRefresher(&fakeRefresher{snap: snap})

@@ -19,13 +19,11 @@ import (
 
 // Event types emitted by the trust-anchor service.
 const (
-	EventAnchorChange          = "trust.anchor_change"
-	EventBootstrapReviewNeeded = "trust.bootstrap_review_needed"
-	EventBootstrapActivated    = "trust.bootstrap_activated"
-	EventPendingApproved       = "trust.pending_approved"
-	EventRefreshFailure        = "trust.refresh_failure"
-	EventStale                 = "trust.stale"
-	EventEgressViolation       = "egress.violation" // platform-standard type
+	EventAnchorChange    = "trust.anchor_change"
+	EventPendingApproved = "trust.pending_approved"
+	EventRefreshFailure  = "trust.refresh_failure"
+	EventStale           = "trust.stale"
+	EventEgressViolation = "egress.violation" // platform-standard type
 	// EventInternalSourceError fires when INTERNAL_TRUST_SOURCE fails to
 	// load or validate — the previous internal anchor set is carried over
 	// (fail-safe), same posture as EventRefreshFailure for territories.
@@ -157,24 +155,6 @@ func (e *Emitter) EgressBlocked(ctx *azugo.Context, target, reason string) {
 		"target": target,
 		"policy": "trusted-list-allowlist",
 		"reason": reason,
-	})
-}
-
-// BootstrapReviewNeeded emits the high-severity staged-bootstrap event.
-func (e *Emitter) BootstrapReviewNeeded(ctx *azugo.Context, ojReference string, added, removed []string) {
-	e.Emit(ctx, EventBootstrapReviewNeeded, secevents.SeverityHigh, broker.OutcomeSuccess, map[string]any{
-		"oj_reference": ojReference,
-		"added":        added,
-		"removed":      removed,
-	})
-}
-
-// BootstrapActivated records an operator-approved bootstrap activation.
-func (e *Emitter) BootstrapActivated(ctx *azugo.Context, ojReference string, version int, actor string) {
-	e.Emit(ctx, EventBootstrapActivated, secevents.SeverityHigh, broker.OutcomeSuccess, map[string]any{
-		"oj_reference": ojReference,
-		"version":      version,
-		"actor_id":     actor,
 	})
 }
 

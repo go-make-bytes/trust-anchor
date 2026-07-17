@@ -3,7 +3,6 @@ package routes
 import (
 	"azugo.io/azugo"
 
-	"github.com/gmb-sig/trust-anchor/routes/request"
 	"github.com/gmb-sig/trust-anchor/routes/response"
 )
 
@@ -31,38 +30,6 @@ func (r *router) approvePending(ctx *azugo.Context) {
 		return
 	}
 	ctx.JSON(&response.Approved{Snapshot: snap.ID, Fingerprint: fingerprint})
-}
-
-// approveBootstrap activates a staged OJ bootstrap update. The caller
-// confirms the OJ reference they reviewed out-of-band; a mismatch with the
-// staged update is refused.
-//
-// @operationId ApproveBootstrap
-// @title Activate staged OJ bootstrap update
-// @description Activates the staged OJEU LOTL-signer set after out-of-band fingerprint verification against the published OJ document.
-// @param ApproveBootstrapRequest body request.ApproveBootstrap true "OJ reference being approved"
-// @success 200 ApprovedResponse response.Approved "Activated"
-// @failure 401 {empty} "Unauthorized"
-// @failure 403 {empty} "Forbidden"
-// @failure 404 string string "No staged bootstrap update / reference mismatch"
-// @resource Governance
-// @route /v1/bootstrap/approve [post].
-func (r *router) approveBootstrap(ctx *azugo.Context) {
-	if !r.requireScope(ctx, "admin") {
-		return
-	}
-	var req request.ApproveBootstrap
-	if err := ctx.Body.JSON(&req); err != nil {
-		ctx.Error(err)
-		return
-	}
-
-	boot, err := r.Manager().ApproveBootstrap(ctx, req.OJReference, ctx.User().ID())
-	if err != nil {
-		ctx.Error(notFoundError{err})
-		return
-	}
-	ctx.JSON(&response.Approved{OJReference: boot.OJReference, Version: boot.Version})
 }
 
 // refresh triggers an immediate ingestion cycle and waits for its result.

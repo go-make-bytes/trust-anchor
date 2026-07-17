@@ -156,9 +156,6 @@ func TestRefreshFullCycle(t *testing.T) {
 	if snap.AdvertisedOJ != "C/2026/1944" {
 		t.Errorf("advertised OJ = %q", snap.AdvertisedOJ)
 	}
-	if snap.PendingBootstrap != nil {
-		t.Error("unexpected staged bootstrap (advertised OJ matches active)")
-	}
 
 	lv := snap.Territory("LV")
 	ee := snap.Territory("EE")
@@ -554,75 +551,27 @@ func TestRefreshInternalErrorNoPreviousData(t *testing.T) {
 	}
 }
 
-// TestRefreshNewBootstrapSupersedesPreviousSigners covers D13/R2: bootstrap
-// re-approval is the disaster-recovery path — when the operator activates a
-// NEWER bootstrap, the cycle must start from it (and reset the pivot
-// position) instead of continuing from the previous snapshot's signer set.
-//
-// Setup: the previous snapshot carries an obsolete signer set (pivot 282's)
-// while claiming the pivot chain is fully processed (seq 378) — so the
-// pre-R2 code path (prefer prev signers, no pivots left to walk) cannot
-// verify the LOTL at all and the cycle would fail. With R2, the newly
-// approved bootstrap (pivot 378's set, version 2) takes precedence and the
-// cycle succeeds.
-func TestRefreshNewBootstrapSupersedesPreviousSigners(t *testing.T) {
-	p := testPipeline(t, newFixtureTransport(), ModeAuto)
-
-	obsolete := fixtureBootstrap(t, "eu-lotl-pivot-282.xml") // version 1
-	prev := &trust.Snapshot{
-		LOTLSequence:     388,
-		LOTLPivotSeq:     378, // chain "fully processed" — nothing left to walk
-		LOTLSignersDER:   obsolete.CertsDER,
-		BootstrapVersion: obsolete.Version,
-	}
-
-	bootNew := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
-	bootNew.Version = 2 // operator re-approved a newer OJ bootstrap
-
-	snap, err := p.Refresh(context.Background(), prev, bootNew)
-	if err != nil {
-		t.Fatalf("cycle must succeed via the newly approved bootstrap: %v", err)
-	}
-	if snap.BootstrapVersion != 2 {
-		t.Errorf("snapshot bootstrap version = %d, want 2", snap.BootstrapVersion)
-	}
-	if snap.LOTLSequence != 388 {
-		t.Errorf("LOTL sequence = %d, want 388", snap.LOTLSequence)
-	}
-	// Pivot position was reset to 0 and re-converged: direct verification with
-	// the new set succeeds, so all advertised pivots are marked processed.
-	if snap.LOTLPivotSeq != 378 {
-		t.Errorf("pivot seq = %d, want 378", snap.LOTLPivotSeq)
-	}
-}
-
-// TestRefreshSameBootstrapVersionKeepsPreviousSigners is the negative control
-// for R2: with an UNCHANGED bootstrap version, the cycle must keep using the
-// previous snapshot's signer set — proven by observing zero pivot fetches
-// (the prev set verifies the LOTL directly; if the obsolete same-version
-// bootstrap had wrongly taken precedence, the pipeline would have had to walk
-// the pivot chain).
-func TestRefreshSameBootstrapVersionKeepsPreviousSigners(t *testing.T) {
+// TestRefreshPrefersPreviousSnapshotSigners: when a previous snapshot carries
+// a signer set, the cycle continues from it (no pivot re-walk) rather than
+// re-deriving from the pinned bootstrap — proven by observing zero pivot
+// fetches (the prev set verifies the LOTL directly).
+func TestRefreshPrefersPreviousSnapshotSigners(t *testing.T) {
 	ft := newFixtureTransport()
 	p := testPipeline(t, ft, ModeAuto)
 
 	current := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 	prev := &trust.Snapshot{
-		LOTLSequence:     388,
-		LOTLPivotSeq:     378,
-		LOTLSignersDER:   current.CertsDER, // prev signers = the current set
-		BootstrapVersion: 1,
+		LOTLSequence:   388,
+		LOTLPivotSeq:   378,
+		LOTLSignersDER: current.CertsDER, // prev signers = the current set
 	}
 
-	obsoleteSameVersion := fixtureBootstrap(t, "eu-lotl-pivot-282.xml") // version 1 == prev
-
-	snap, err := p.Refresh(context.Background(), prev, obsoleteSameVersion)
+	snap, err := p.Refresh(context.Background(), prev, current)
 	if err != nil {
 		t.Fatalf("cycle must succeed via the previous snapshot's signers: %v", err)
 	}
 	if got := ft.pivotFetches(); got != 0 {
-		t.Errorf("pivot fetches = %d, want 0 (prev signers must be used directly; "+
-			"a same-version bootstrap must NOT supersede them)", got)
+		t.Errorf("pivot fetches = %d, want 0 (previous snapshot signers must be used directly)", got)
 	}
 	if snap.LOTLPivotSeq != 378 {
 		t.Errorf("pivot seq = %d, want 378", snap.LOTLPivotSeq)

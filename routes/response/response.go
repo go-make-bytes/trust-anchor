@@ -62,21 +62,9 @@ type Snapshot struct {
 	Territories      []TerritorySummary    `json:"territories"`
 	OverlayCount     int                   `json:"overlayCount"`
 	InternalCount    int                   `json:"internalCount"`
-	Diff             *trust.Diff           `json:"diff,omitempty"`
-	Pending          []trust.PendingAnchor `json:"pending,omitempty"`
-	PendingBootstrap *PendingBootstrap     `json:"pendingBootstrap,omitempty"`
-	Bootstrap        *BootstrapSummary     `json:"bootstrap,omitempty"`
-}
-
-// PendingBootstrap describes a staged OJ bootstrap update awaiting approval
-// (certificates are summarized — subjects + fingerprints — for review).
-type PendingBootstrap struct {
-	OJReference  string    `json:"ojReference"`
-	DetectedAt   time.Time `json:"detectedAt"`
-	Subjects     []string  `json:"subjects"`
-	Fingerprints []string  `json:"fingerprints"`
-	Added        []string  `json:"added,omitempty"`
-	Removed      []string  `json:"removed,omitempty"`
+	Diff      *trust.Diff           `json:"diff,omitempty"`
+	Pending   []trust.PendingAnchor `json:"pending,omitempty"`
+	Bootstrap *BootstrapSummary     `json:"bootstrap,omitempty"`
 }
 
 // NewSnapshot builds the snapshot summary response.
@@ -107,17 +95,6 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 			AnchorCount:       len(t.Anchors),
 		})
 	}
-	if snap.PendingBootstrap != nil {
-		pb := snap.PendingBootstrap
-		out.PendingBootstrap = &PendingBootstrap{
-			OJReference:  pb.OJReference,
-			DetectedAt:   pb.DetectedAt,
-			Subjects:     pb.Subjects,
-			Fingerprints: pb.Fingerprints,
-			Added:        pb.Added,
-			Removed:      pb.Removed,
-		}
-	}
 	if boot != nil {
 		out.Bootstrap = &BootstrapSummary{
 			Version:      boot.Version,
@@ -136,10 +113,8 @@ type Refresh struct {
 	Changed  bool   `json:"changed"`
 }
 
-// Approved is the approval endpoints' response.
+// Approved is the pending-anchor approval endpoint's response.
 type Approved struct {
 	Snapshot    string `json:"snapshot,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
-	OJReference string `json:"ojReference,omitempty"`
-	Version     int    `json:"version,omitempty"`
 }

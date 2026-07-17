@@ -125,7 +125,7 @@ func legacyGoldenApp(t *testing.T) *trustanchor.App {
 		Version: 1, OJReference: "C/2026/1944",
 		ActivatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), Seeded: true,
 	})))
-	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "", "")))
+	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "")))
 
 	return app
 }

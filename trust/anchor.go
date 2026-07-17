@@ -177,19 +177,6 @@ func (b *Bootstrap) Fingerprints() []string {
 	return out
 }
 
-// PendingBootstrap is a staged (detected + fetched, NOT yet active) OJ
-// bootstrap update awaiting out-of-band fingerprint review and approval.
-type PendingBootstrap struct {
-	OJReference  string    `json:"ojReference"`
-	CertsDER     [][]byte  `json:"certsDer"`
-	Subjects     []string  `json:"subjects"`
-	Fingerprints []string  `json:"fingerprints"`
-	DetectedAt   time.Time `json:"detectedAt"`
-	// Added/Removed are fingerprint diffs against the active bootstrap set.
-	Added   []string `json:"added,omitempty"`
-	Removed []string `json:"removed,omitempty"`
-}
-
 // Snapshot is one versioned, content-addressed trust-anchor state. The active
 // snapshot is held in memory and persisted to the snapshot store.
 type Snapshot struct {
@@ -218,8 +205,7 @@ type Snapshot struct {
 	// chain and bypass hold mode — deploying the file IS the approval.
 	Internal []Anchor `json:"internal,omitempty"`
 
-	Pending          []PendingAnchor   `json:"pending,omitempty"`
-	PendingBootstrap *PendingBootstrap `json:"pendingBootstrap,omitempty"`
+	Pending []PendingAnchor `json:"pending,omitempty"`
 
 	Diff *Diff `json:"diff,omitempty"`
 }

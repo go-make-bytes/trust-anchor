@@ -27,7 +27,6 @@ func Init(a *trustanchor.App) error {
 	v1.Get("/anchors.json", r.anchorsJSON)
 	v1.Get("/snapshot", r.snapshot)
 	v1.Post("/pending/{fingerprint}/approve", r.approvePending)
-	v1.Post("/bootstrap/approve", r.approveBootstrap)
 	v1.Post("/refresh", r.refresh)
 
 	return nil

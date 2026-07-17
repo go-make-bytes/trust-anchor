@@ -24,9 +24,8 @@ import (
 
 // fakeRefresher lets route tests control /v1/refresh outcomes. It returns a
 // fresh clone each cycle (the manager may run it from the background refresh
-// task concurrently with assertions) and models the pipeline's bootstrap
-// semantics: once the active bootstrap matches the staged OJ reference,
-// nothing is re-staged.
+// task concurrently with assertions) and stamps the active bootstrap
+// reference/version onto the snapshot like the real pipeline.
 type fakeRefresher struct {
 	snap *trust.Snapshot
 	err  error
@@ -47,9 +46,6 @@ func (f *fakeRefresher) Refresh(_ context.Context, prev *trust.Snapshot, boot *t
 	if boot != nil {
 		snap.BootstrapOJRef = boot.OJReference
 		snap.BootstrapVersion = boot.Version
-		if snap.PendingBootstrap != nil && snap.PendingBootstrap.OJReference == boot.OJReference {
-			snap.PendingBootstrap = nil
-		}
 	}
 	if prev != nil {
 		snap.PrevID = prev.ID
@@ -108,12 +104,6 @@ func testSnapshot(t testing.TB) *trust.Snapshot {
 			Anchor:    testAnchor(t, "LV", "lv-held", []string{trust.UseSignature}, true),
 			FirstSeen: time.Now().UTC(),
 		}},
-		PendingBootstrap: &trust.PendingBootstrap{
-			OJReference:  "C/2030/1000",
-			CertsDER:     [][]byte{testCertDER(t, "new-oj-root")},
-			Fingerprints: []string{"ff00"},
-			DetectedAt:   time.Now().UTC(),
-		},
 	}
 	snap.ComputeID()
 	return snap
@@ -130,7 +120,7 @@ func testApp(t *testing.T) (*azugo.TestApp, *trustanchor.App, *trust.Snapshot) {
 	qt.Assert(t, qt.IsNil(app.Store().SaveBootstrap(ctx, &trust.Bootstrap{
 		Version: 1, OJReference: "C/2026/1944", ActivatedAt: time.Now().UTC(), Seeded: true,
 	})))
-	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "", "")))
+	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "")))
 
 	// Never let route tests hit the network.
 	app.Manager().SetRefresher(&fakeRefresher{snap: snap})
@@ -322,8 +312,6 @@ func TestSnapshotEndpoint(t *testing.T) {
 	qt.Check(t, qt.Equals(out.LOTLSequence, uint64(388)))
 	qt.Check(t, qt.Equals(len(out.Territories), 2))
 	qt.Check(t, qt.Equals(len(out.Pending), 1))
-	qt.Assert(t, qt.IsNotNil(out.PendingBootstrap))
-	qt.Check(t, qt.Equals(out.PendingBootstrap.OJReference, "C/2030/1000"))
 	qt.Assert(t, qt.IsNotNil(out.Bootstrap))
 	qt.Check(t, qt.Equals(out.Bootstrap.OJReference, "C/2026/1944"))
 }
@@ -355,32 +343,6 @@ func TestApprovePendingFlow(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 	qt.Check(t, qt.Equals(string(resp.Header.Peek("ETag")), `"`+active.ID+`"`))
 	fasthttp.ReleaseResponse(resp)
-}
-
-func TestApproveBootstrapFlow(t *testing.T) {
-	ta, app, _ := testApp(t)
-	defer ta.Stop()
-	tc := ta.TestClient()
-
-	// Mismatched reference → 404.
-	resp, err := tc.PostJSON("/v1/bootstrap/approve",
-		map[string]string{"ojReference": "C/2031/9999"},
-		tc.WithHeader("X-Test-Scopes", "trust:admin"))
-	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(resp.StatusCode(), fasthttp.StatusNotFound))
-	fasthttp.ReleaseResponse(resp)
-
-	resp, err = tc.PostJSON("/v1/bootstrap/approve",
-		map[string]string{"ojReference": "C/2030/1000"},
-		tc.WithHeader("X-Test-Scopes", "trust:admin"))
-	qt.Assert(t, qt.IsNil(err))
-	qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
-	var out response.Approved
-	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &out)))
-	qt.Check(t, qt.Equals(out.Version, 2))
-
-	qt.Check(t, qt.Equals(app.Manager().Bootstrap().OJReference, "C/2030/1000"))
-	qt.Check(t, qt.IsNil(app.Manager().Active().PendingBootstrap))
 }
 
 func TestRefreshEndpoint(t *testing.T) {

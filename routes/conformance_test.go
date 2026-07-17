@@ -81,7 +81,7 @@ func conformanceApp(t *testing.T) *azugo.TestApp {
 	qt.Assert(t, qt.IsNil(app.Store().SaveBootstrap(ctx, &trust.Bootstrap{
 		Version: 1, OJReference: "C/2026/1944", ActivatedAt: time.Now().UTC(), Seeded: true,
 	})))
-	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "", "")))
+	qt.Assert(t, qt.IsNil(app.Manager().Initialize(ctx, "")))
 
 	qt.Assert(t, qt.IsNil(Init(app)))
 	ta := azugo.NewTestApp(app.App)

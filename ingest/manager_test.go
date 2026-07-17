@@ -67,7 +67,7 @@ func TestManagerRefreshAdoptsAndPersists(t *testing.T) {
 	snap := managerSnapshot(t)
 	m, st := managerForTest(t, &fakeRefresher{snap: snap})
 	seedBootstrap(t, st)
-	if err := m.Initialize(context.Background(), "", ""); err != nil {
+	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +90,7 @@ func TestManagerFailSafeKeepsLastGood(t *testing.T) {
 	fake := &fakeRefresher{snap: snap}
 	m, st := managerForTest(t, fake)
 	seedBootstrap(t, st)
-	if err := m.Initialize(context.Background(), "", ""); err != nil {
+	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := m.Refresh(context.Background()); err != nil {
@@ -115,7 +115,7 @@ func TestManagerInitializeRestoresFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := m.Initialize(context.Background(), "", ""); err != nil {
+	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if m.Active() == nil || m.Active().ID != snap.ID {
@@ -125,7 +125,7 @@ func TestManagerInitializeRestoresFromStore(t *testing.T) {
 
 func TestManagerInitializeRequiresBootstrap(t *testing.T) {
 	m, _ := managerForTest(t, &fakeRefresher{})
-	if err := m.Initialize(context.Background(), "", ""); err == nil {
+	if err := m.Initialize(context.Background(), ""); err == nil {
 		t.Fatal("Initialize succeeded without bootstrap")
 	}
 }
@@ -141,7 +141,7 @@ func TestManagerApprovePending(t *testing.T) {
 
 	m, st := managerForTest(t, &fakeRefresher{snap: snap})
 	seedBootstrap(t, st)
-	if err := m.Initialize(context.Background(), "", ""); err != nil {
+	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := m.Refresh(context.Background()); err != nil {
@@ -176,47 +176,3 @@ func TestManagerApprovePending(t *testing.T) {
 	}
 }
 
-func TestManagerApproveBootstrap(t *testing.T) {
-	snap := managerSnapshot(t)
-	snap.PendingBootstrap = &trust.PendingBootstrap{
-		OJReference:  "C/2030/1000",
-		CertsDER:     [][]byte{{3}},
-		Fingerprints: []string{"cc33"},
-		DetectedAt:   time.Now().UTC(),
-	}
-
-	m, st := managerForTest(t, &fakeRefresher{snap: snap})
-	seedBootstrap(t, st)
-	if err := m.Initialize(context.Background(), "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := m.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	// Approving a different reference than staged is refused.
-	if _, err := m.ApproveBootstrap(nil, "C/2031/9999", "ops"); err == nil {
-		t.Fatal("approved a non-staged OJ reference")
-	}
-
-	boot, err := m.ApproveBootstrap(nil, "C/2030/1000", "ops")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if boot.Version != 2 || boot.OJReference != "C/2030/1000" {
-		t.Fatalf("activated bootstrap: %+v", boot)
-	}
-	if m.Active().PendingBootstrap != nil {
-		t.Fatal("staged update still present after activation")
-	}
-	persisted, err := st.LoadLatestBootstrap(context.Background())
-	if err != nil || persisted == nil || persisted.Version != 2 {
-		t.Fatalf("activated bootstrap not persisted: %+v %v", persisted, err)
-	}
-	// Activation requests a re-verification cycle.
-	select {
-	case <-m.Kick():
-	default:
-		t.Fatal("no refresh triggered after bootstrap activation")
-	}
-}
