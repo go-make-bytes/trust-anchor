@@ -86,7 +86,7 @@ way, only how a request earns them differs.
 |---|---|---|---|
 | GET | `/v1/anchors?territory=LV,EE&use=signature&qscdOnly=true&type=pid_provider` | trust:read | PEM bundle (`application/x-pem-file`). Strong `ETag` = snapshot id, honors `If-None-Match` → 304. Headers `X-Trust-Snapshot`, `X-Trust-Stale`. `type=` is additive (see [Internal trust source](#internal-trust-source--operator-declared-eudi-anchors)); omitted ⇒ legacy untyped anchors only |
 | GET | `/v1/anchors.json` (same filters) | trust:read | base64-DER certs + TSP/service metadata, qualifications, fingerprints, plus `type`/`useCases`/`tlSequence` when set |
-| GET | `/v1/snapshot` | trust:read | snapshot summary + diff vs previous + pending set + `overlayCount`/`internalCount` |
+| GET | `/v1/snapshot` | trust:read | snapshot summary + diff vs previous + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `overlayCount`/`internalCount` |
 | POST | `/v1/pending/{fingerprint}/approve` | trust:admin | approve a held addition (hold mode) |
 | POST | `/v1/refresh` | trust:admin | run an immediate ingestion cycle (also re-reads `INTERNAL_TRUST_SOURCE`) |
 | GET | `/healthz`, `/readyz` | none | readiness = a valid snapshot is loaded |
