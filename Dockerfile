@@ -8,7 +8,7 @@ COPY . .
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM ghcr.io/wntrtech/scratch:v1.0.0-3
 COPY --from=build /out/server /server
 
 # Baked LOTL signer set — the certificates authorised to sign the EU List of
