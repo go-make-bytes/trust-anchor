@@ -35,6 +35,13 @@ type Config struct {
 	// (INTERNAL_TRUST_SOURCE, trust.LoadInternal). Empty means none configured.
 	InternalTrustSource string
 	OJNoticeURL         string
+	// OJOnlineFetch enables fetching the OJ signer-certificate notice online
+	// (the CELLAR/ELI endpoints): the first-install auto-seed and the per-cycle
+	// rotation watch. Default OFF — the published OJ notice is not reliably
+	// fetchable for automation, so the signer set is pinned locally via
+	// LOTL_BOOTSTRAP_CERTS_PATH and the service never depends on that network
+	// path. Opt in only where a reachable notice source is configured.
+	OJOnlineFetch bool
 	// BootstrapAutoApprove activates an EU-API-fetched first bootstrap without
 	// operator approval (first-install convenience; see Manager.Initialize).
 	BootstrapAutoApprove bool
@@ -99,12 +106,16 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
 	}
 
-	// OJ watch: detect + fetch + stage, never activate.
-	var prevStaged *trust.PendingBootstrap
-	if prev != nil {
-		prevStaged = prev.PendingBootstrap
+	// OJ watch: detect + fetch + stage, never activate. Off unless the online
+	// OJ fetch is explicitly enabled — with a locally pinned signer set the
+	// service must not reach out to the (unreliable) notice endpoints.
+	if p.cfg.OJOnlineFetch {
+		var prevStaged *trust.PendingBootstrap
+		if prev != nil {
+			prevStaged = prev.PendingBootstrap
+		}
+		next.PendingBootstrap = p.stageBootstrapUpdate(ctx, next.AdvertisedOJ, boot, prevStaged, now)
 	}
-	next.PendingBootstrap = p.stageBootstrapUpdate(ctx, next.AdvertisedOJ, boot, prevStaged, now)
 
 	// National trusted lists.
 	territories := append([]string(nil), p.cfg.Territories...)

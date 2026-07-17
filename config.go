@@ -67,14 +67,23 @@ type Configuration struct {
 	// LOTLURL is the EU List of Trusted Lists location.
 	LOTLURL string `mapstructure:"lotl_url" validate:"required,url"`
 	// BootstrapCertsPath seeds the OJEU-published LOTL signer certificates at
-	// first install (PEM file or dir). Afterwards the approved store is
-	// authoritative and this path is ignored.
+	// first install: a signer manifest (lotl-signers.yaml), a PEM/DER file, or
+	// a directory of PEM/DER files. This is the supported install path (the
+	// image bakes a default). Afterwards the approved store is authoritative
+	// and this path is ignored.
 	BootstrapCertsPath string `mapstructure:"lotl_bootstrap_certs_path"`
 	// OJPinnedReference is the OJ notice the pinned certs came from
 	// (e.g. "C/2026/1944").
 	OJPinnedReference string `mapstructure:"oj_pinned_reference"`
 	// OJNoticeURL optionally overrides the CELLAR/ELI URL for the OJ watch.
 	OJNoticeURL string `mapstructure:"oj_notice_url" validate:"omitempty,url"`
+	// OJOnlineFetch enables the online OJ signer-certificate notice fetch (the
+	// CELLAR/ELI endpoints) — both the first-install auto-seed and the per-cycle
+	// rotation watch. Default OFF: the published notice is not reliably
+	// fetchable for automation, so the signer set is pinned locally via
+	// LOTL_BOOTSTRAP_CERTS_PATH and the service never depends on that network
+	// path. Enable only where a reachable notice source is configured.
+	OJOnlineFetch bool `mapstructure:"oj_online_fetch"`
 
 	// BootstrapAutoApprove controls first-install bootstrapping when the store
 	// has no bootstrap and no LOTL_BOOTSTRAP_CERTS_PATH is pinned: the engine
@@ -157,11 +166,13 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	v.SetDefault("trust_fetch_timeout", 30*time.Second)
 	v.SetDefault("max_tl_bytes", int64(20*1024*1024))
 	v.SetDefault("trust_snapshot_use_ssl", true)
+	v.SetDefault("oj_online_fetch", false)
 
 	_ = v.BindEnv("lotl_url", "LOTL_URL")
 	_ = v.BindEnv("lotl_bootstrap_certs_path", "LOTL_BOOTSTRAP_CERTS_PATH")
 	_ = v.BindEnv("oj_pinned_reference", "OJ_PINNED_REFERENCE")
 	_ = v.BindEnv("oj_notice_url", "OJ_NOTICE_URL")
+	_ = v.BindEnv("oj_online_fetch", "OJ_ONLINE_FETCH")
 	_ = v.BindEnv("trust_bootstrap_auto_approve", "TRUST_BOOTSTRAP_AUTO_APPROVE")
 	_ = v.BindEnv("trust_territories", "TRUST_TERRITORIES")
 	_ = v.BindEnv("trust_accepted_statuses", "TRUST_ACCEPTED_STATUSES")

@@ -11,6 +11,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server 
 FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/server /server
 
+# Baked LOTL signer set — the certificates authorised to sign the EU List of
+# Trusted Lists. A normal deploy needs no trust configuration; for an urgent
+# rotation before the next image build, mount a newer manifest and override
+# LOTL_BOOTSTRAP_CERTS_PATH to it.
+COPY --from=build /src/trust-config/lotl-signers.yaml /etc/trust-anchor/lotl-signers.yaml
+ENV LOTL_BOOTSTRAP_CERTS_PATH=/etc/trust-anchor/lotl-signers.yaml
+
 EXPOSE 8080/tcp
 ENTRYPOINT ["/server", "web"]
 HEALTHCHECK --start-period=20s --start-interval=5s --interval=1m --timeout=10s --retries=5 \

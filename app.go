@@ -110,6 +110,7 @@ func (a *App) init() error {
 		ExtraAnchorsPath:     cfg.ExtraAnchorsPath,
 		InternalTrustSource:  cfg.InternalTrustSource,
 		OJNoticeURL:          cfg.OJNoticeURL,
+		OJOnlineFetch:        cfg.OJOnlineFetch,
 		BootstrapAutoApprove: cfg.BootstrapAutoApprove,
 		StaleGrace:           cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())

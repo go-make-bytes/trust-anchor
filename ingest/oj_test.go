@@ -100,6 +100,7 @@ func TestStageBootstrapUpdate(t *testing.T) {
 func TestRefreshStagesBootstrapWhenOJDiffers(t *testing.T) {
 	ft := newFixtureTransport()
 	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.OJOnlineFetch = true // the OJ watch only runs when the online fetch is enabled
 
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 	boot.OJReference = "C/2019/0001" // pretend the pinned set predates the current OJ notice
@@ -119,5 +120,32 @@ func TestRefreshStagesBootstrapWhenOJDiffers(t *testing.T) {
 	// Staged, NOT activated: the active bootstrap reference is unchanged.
 	if snap.BootstrapOJRef != "C/2019/0001" {
 		t.Errorf("active bootstrap reference changed to %q without approval", snap.BootstrapOJRef)
+	}
+}
+
+// TestRefreshSkipsOnlineOJFetchByDefault pins the default posture: with the
+// online OJ fetch disabled (the default), a cycle whose LOTL advertises a
+// different OJ reference neither stages a bootstrap update nor reaches out to
+// the notice endpoint — the pinned local signer set is authoritative and the
+// service makes no doomed egress attempt.
+func TestRefreshSkipsOnlineOJFetchByDefault(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto) // OJOnlineFetch defaults to false
+
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+	boot.OJReference = "C/2019/0001" // older than the LOTL-advertised C/2026/1944
+
+	cellar := "https://publications.europa.eu/resource/eli/C/2026/1944/oj"
+	ft.body[cellar] = syntheticOJNotice(t, boot.CertsDER...)
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.PendingBootstrap != nil {
+		t.Fatalf("staged a bootstrap update with the online OJ fetch disabled: %+v", snap.PendingBootstrap)
+	}
+	if ft.counts[cellar] != 0 {
+		t.Errorf("notice endpoint fetched %d times with the online OJ fetch disabled", ft.counts[cellar])
 	}
 }

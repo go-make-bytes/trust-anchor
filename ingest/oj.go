@@ -46,6 +46,12 @@ func cellarURL(ojRef string) string {
 // the Manager need not reach into the pipeline config. Implements the
 // ojBootstrapSeeder interface consulted by Manager.Initialize at first install.
 func (p *Pipeline) FetchFirstBootstrap(ctx context.Context, ojRef string, now time.Time) (*trust.Bootstrap, bool, error) {
+	if !p.cfg.OJOnlineFetch {
+		// The online OJ notice is not a reliable install-time dependency; the
+		// operator-pinned signer set is the supported path. Fail fast with a
+		// clear pointer instead of attempting an unreachable fetch.
+		return nil, p.cfg.BootstrapAutoApprove, fmt.Errorf("fetch OJ bootstrap %s: online OJ fetch is disabled — pin the LOTL signer set via LOTL_BOOTSTRAP_CERTS_PATH, or set OJ_ONLINE_FETCH=true where a notice source is reachable", ojRef)
+	}
 	urls := []string{cellarURL(ojRef)}
 	if p.cfg.OJNoticeURL != "" {
 		urls = append([]string{p.cfg.OJNoticeURL}, urls...)
