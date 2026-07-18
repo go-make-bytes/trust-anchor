@@ -51,20 +51,20 @@ type BootstrapSummary struct {
 
 // Snapshot is the /v1/snapshot response.
 type Snapshot struct {
-	ID               string                `json:"id"`
-	PrevID           string                `json:"prevId,omitempty"`
-	GeneratedAt      time.Time             `json:"generatedAt"`
-	LOTLSequence     uint64                `json:"lotlSequence"`
-	LOTLIssueTime    time.Time             `json:"lotlIssueTime"`
-	LOTLNextUpdate   *time.Time            `json:"lotlNextUpdate,omitempty"`
-	LOTLPivotSeq     uint64                `json:"lotlPivotSeq"`
-	AdvertisedOJ     string                `json:"advertisedOj,omitempty"`
-	Territories      []TerritorySummary    `json:"territories"`
-	OverlayCount     int                   `json:"overlayCount"`
-	InternalCount    int                   `json:"internalCount"`
-	Diff      *trust.Diff           `json:"diff,omitempty"`
-	Pending   []trust.PendingAnchor `json:"pending,omitempty"`
-	Bootstrap *BootstrapSummary     `json:"bootstrap,omitempty"`
+	ID             string                `json:"id"`
+	PrevID         string                `json:"prevId,omitempty"`
+	GeneratedAt    time.Time             `json:"generatedAt"`
+	LOTLSequence   uint64                `json:"lotlSequence"`
+	LOTLIssueTime  time.Time             `json:"lotlIssueTime"`
+	LOTLNextUpdate *time.Time            `json:"lotlNextUpdate,omitempty"`
+	LOTLPivotSeq   uint64                `json:"lotlPivotSeq"`
+	AdvertisedOJ   string                `json:"advertisedOj,omitempty"`
+	Territories    []TerritorySummary    `json:"territories"`
+	OverlayCount   int                   `json:"overlayCount"`
+	InternalCount  int                   `json:"internalCount"`
+	Diff           *trust.Diff           `json:"diff,omitempty"`
+	Pending        []trust.PendingAnchor `json:"pending,omitempty"`
+	Bootstrap      *BootstrapSummary     `json:"bootstrap,omitempty"`
 }
 
 // NewSnapshot builds the snapshot summary response.

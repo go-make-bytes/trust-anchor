@@ -1,6 +1,6 @@
 module github.com/gmb-sig/trust-anchor
 
-go 1.26.4
+go 1.26.5
 
 require (
 	azugo.io/azugo v0.35.1

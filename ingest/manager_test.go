@@ -175,4 +175,3 @@ func TestManagerApprovePending(t *testing.T) {
 		t.Fatal("approved snapshot not active")
 	}
 }
-

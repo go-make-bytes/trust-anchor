@@ -122,7 +122,7 @@ func NewConfiguration() *Configuration {
 
 // ServerCore returns the embedded azugo configuration.
 func (c *Configuration) ServerCore() *azugocfg.Configuration {
-	return c.BaseConfiguration.Configuration
+	return c.Configuration
 }
 
 // Bind registers defaults and environment bindings.

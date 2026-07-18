@@ -191,7 +191,7 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 		p.log.Info("LOTL direct verification failed, processing pivot chain", zap.Error(verr))
 		signers, pivotSeq, err = p.walkPivots(ctx, refs, signers, pivotSeq)
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("ingest: pivot chain: %w (after direct verification failed: %s)", err, verr)
+			return nil, nil, 0, fmt.Errorf("ingest: pivot chain: %w (after direct verification failed: %w)", err, verr)
 		}
 		verified, err = tsl.Verify(raw, signers)
 		if err != nil {
