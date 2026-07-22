@@ -19,10 +19,10 @@ import (
 	"github.com/gmb-lib/go-authbyte/authclient"
 	"github.com/gmb-lib/go-platform-kit/platform"
 
-	"github.com/gmb-sig/trust-anchor/events"
-	"github.com/gmb-sig/trust-anchor/ingest"
-	"github.com/gmb-sig/trust-anchor/store"
-	"github.com/gmb-sig/trust-anchor/tasks"
+	"github.com/go-make-bytes/trust-anchor/events"
+	"github.com/go-make-bytes/trust-anchor/ingest"
+	"github.com/go-make-bytes/trust-anchor/store"
+	"github.com/go-make-bytes/trust-anchor/tasks"
 )
 
 // App is the trust-anchor application container.

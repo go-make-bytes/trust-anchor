@@ -4,7 +4,7 @@ import (
 	"azugo.io/azugo/server"
 	"azugo.io/core/cli"
 
-	app "github.com/gmb-sig/trust-anchor"
+	app "github.com/go-make-bytes/trust-anchor"
 )
 
 func init() {

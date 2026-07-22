@@ -11,8 +11,8 @@ import (
 	"github.com/go-quicktest/qt"
 	"github.com/valyala/fasthttp"
 
-	trustanchor "github.com/gmb-sig/trust-anchor"
-	"github.com/gmb-sig/trust-anchor/trust"
+	trustanchor "github.com/go-make-bytes/trust-anchor"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // internalModeEnv sets the minimal environment an AUTH_MODE=internal

@@ -7,7 +7,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/gmb-sig/trust-anchor/ingest"
+	"github.com/go-make-bytes/trust-anchor/ingest"
 )
 
 // minWake bounds how aggressively the task can rewake on a near NextUpdate.

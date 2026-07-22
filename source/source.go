@@ -13,7 +13,7 @@ package source
 import (
 	"context"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // Type is the source-type discriminator. It becomes a first-class

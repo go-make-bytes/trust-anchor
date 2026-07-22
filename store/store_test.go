@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 func roundTrip(t *testing.T, s Store) {

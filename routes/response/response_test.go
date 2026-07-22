@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // TestNewSnapshotInternalCount proves the internal anchor count wiring

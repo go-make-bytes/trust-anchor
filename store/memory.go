@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // Memory is an in-memory Store for tests and ephemeral development runs. It

@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // Store persists snapshots (versioned, with a "latest" pointer) and the

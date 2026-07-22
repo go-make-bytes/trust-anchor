@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/tsl"
+	"github.com/go-make-bytes/trust-anchor/tsl"
 )
 
 // bakedManifest is the operator-managed LOTL signer set the image ships with.

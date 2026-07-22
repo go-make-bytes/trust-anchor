@@ -14,9 +14,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/gmb-sig/trust-anchor/events"
-	"github.com/gmb-sig/trust-anchor/trust"
-	"github.com/gmb-sig/trust-anchor/tsl"
+	"github.com/go-make-bytes/trust-anchor/events"
+	"github.com/go-make-bytes/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/tsl"
 )
 
 // Live URLs as recorded in the fixtures.

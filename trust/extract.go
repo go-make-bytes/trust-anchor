@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/tsl"
+	"github.com/go-make-bytes/trust-anchor/tsl"
 )
 
 // statusBase is the prefix of TS 119 612 service-status URIs; shorthand

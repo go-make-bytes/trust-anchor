@@ -6,7 +6,7 @@ import (
 	"azugo.io/azugo"
 	"github.com/valyala/fasthttp"
 
-	"github.com/gmb-sig/trust-anchor/routes/response"
+	"github.com/go-make-bytes/trust-anchor/routes/response"
 )
 
 // healthz is the liveness probe.

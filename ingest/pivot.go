@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/gmb-sig/trust-anchor/tsl"
+	"github.com/go-make-bytes/trust-anchor/tsl"
 )
 
 // pivotURLRe matches LOTL pivot file URLs advertised in SchemeInformationURI

@@ -4,7 +4,7 @@ package response
 import (
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/trust"
+	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
 // Anchors is the /v1/anchors.json response.

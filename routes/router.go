@@ -7,7 +7,7 @@ import (
 
 	"github.com/gmb-lib/go-platform-kit/broker"
 	"github.com/gmb-lib/go-sec-events/secevents"
-	trustanchor "github.com/gmb-sig/trust-anchor"
+	trustanchor "github.com/go-make-bytes/trust-anchor"
 )
 
 type router struct {

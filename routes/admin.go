@@ -3,7 +3,7 @@ package routes
 import (
 	"azugo.io/azugo"
 
-	"github.com/gmb-sig/trust-anchor/routes/response"
+	"github.com/go-make-bytes/trust-anchor/routes/response"
 )
 
 // approvePending approves a hold-mode addition by fingerprint.

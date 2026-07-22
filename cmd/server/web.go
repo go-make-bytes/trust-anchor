@@ -5,8 +5,8 @@ import (
 	"azugo.io/core/cli"
 	"github.com/spf13/cobra"
 
-	app "github.com/gmb-sig/trust-anchor"
-	"github.com/gmb-sig/trust-anchor/routes"
+	app "github.com/go-make-bytes/trust-anchor"
+	"github.com/go-make-bytes/trust-anchor/routes"
 )
 
 func runWeb(cmd *cobra.Command, _ []string) error {

@@ -9,7 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/gmb-sig/trust-anchor/events"
+	"github.com/go-make-bytes/trust-anchor/events"
 )
 
 // TestLiveRefresh runs a full ingestion cycle against the real EU LOTL and

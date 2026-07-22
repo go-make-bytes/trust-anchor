@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gmb-sig/trust-anchor/tsl"
+	"github.com/go-make-bytes/trust-anchor/tsl"
 )
 
 func parseFixture(t *testing.T, name string) *tsl.TrustedList {
