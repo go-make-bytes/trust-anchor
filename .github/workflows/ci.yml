@@ -45,9 +45,27 @@ jobs:
       - name: Test (race + coverage)
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
-      # Untrusted-input parser (the internal trust-source YAML) must never panic.
-      - name: Fuzz (short) — internal trust source parser
-        run: go test ./trust -run '^$' -fuzz '^FuzzLoadInternal$' -fuzztime 30s
+  # EDIT (optional): uncomment for a repo with an untrusted-input parser — a short
+  # fuzz sweep over every Fuzz* target, 30s each. Loops per package, never a bare
+  # `./...`: `go test -fuzz` rejects a package pattern that expands to more than
+  # one package, which a multi-package service (the common case here) always does.
+  # fuzz-short:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+  #     - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+  #       with:
+  #         go-version-file: go.mod
+  #         cache: true
+  #         cache-dependency-path: go.sum
+  #     - name: Fuzz (30s per target)
+  #       run: |
+  #         for pkg in $(go list ./...); do
+  #           targets=$(go test -list '^Fuzz' "$pkg" 2>/dev/null | grep '^Fuzz' || true)
+  #           for t in $targets; do
+  #             go test -run '^$' -fuzz "^${t}\$" -fuzztime 30s "$pkg"
+  #           done
+  #         done
 
   image:
     needs: test
