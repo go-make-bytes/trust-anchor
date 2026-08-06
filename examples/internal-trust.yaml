@@ -11,9 +11,9 @@
 # service trusts directly, with no upstream trusted-list / XMLDSig chain
 # behind it (the same posture as LOTL_BOOTSTRAP_CERTS_PATH). Treat it like
 # key material — ownership, review, change control — not like ordinary
-# config. See README.md "Internal trust source" and DECISIONS.md D17 for the
-# full semantics (fail-closed whole-file validation, immediate activation,
-# no hold mode, re-read on every refresh cycle).
+# config. See README.md "The internal trust source" for the full semantics
+# (fail-closed whole-file validation, immediate activation, no hold mode,
+# re-read on every refresh cycle — edit, then trigger a refresh).
 #
 # `type` must be one of the closed EUDI taxonomy (trust.AnchorTypes):
 #   pid_provider   qeaa_provider   pub_eaa_provider   eaa_provider
