@@ -2,7 +2,6 @@ package routes
 
 import (
 	"strings"
-	"time"
 
 	"azugo.io/azugo"
 	"github.com/valyala/fasthttp"
@@ -61,7 +60,7 @@ func (r *router) snapshotForServing(ctx *azugo.Context) *trust.Snapshot {
 // stale computes the serve-time staleness flag: any requested territory past
 // NextUpdate + grace.
 func (r *router) stale(snap *trust.Snapshot, territories []string) bool {
-	now := time.Now().UTC()
+	now := r.Now()
 	grace := r.Config().StaleGrace
 	for _, t := range snap.Territories {
 		if len(territories) > 0 && !containsFold(territories, t.Code) {

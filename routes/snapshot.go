@@ -1,8 +1,6 @@
 package routes
 
 import (
-	"time"
-
 	"azugo.io/azugo"
 	"github.com/valyala/fasthttp"
 
@@ -47,5 +45,5 @@ func (r *router) snapshot(ctx *azugo.Context) {
 		return
 	}
 	ctx.Header.Set(headerTrustSnapshot, snap.ID)
-	ctx.JSON(response.NewSnapshot(snap, r.Manager().Bootstrap(), time.Now().UTC(), r.Config().StaleGrace))
+	ctx.JSON(response.NewSnapshot(snap, r.Manager().Bootstrap(), r.Now(), r.Config().StaleGrace))
 }

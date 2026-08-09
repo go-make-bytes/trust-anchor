@@ -8,6 +8,7 @@ package trustanchor
 import (
 	"crypto/subtle"
 	"fmt"
+	"time"
 
 	"azugo.io/azugo"
 	"azugo.io/azugo/server"
@@ -36,6 +37,13 @@ type App struct {
 	manager    *ingest.Manager
 	authClient *authclient.Client
 	authMW     azugo.RequestHandlerFunc
+
+	// clock supplies the current time to request handling. Staleness is
+	// evaluated when a bundle is served, not when it is built, so the answer
+	// depends on when the question is asked — which makes it the one part of a
+	// response that cannot be reproduced from the snapshot alone. Nil means
+	// the real clock.
+	clock func() time.Time
 }
 
 // New creates the application: configuration, platform cross-cutting setup,
@@ -196,3 +204,18 @@ func (a *App) AuthMiddleware() azugo.RequestHandlerFunc { return a.authMW }
 // only — production wiring always uses one of the two real middlewares
 // selected by AuthMode (go-authbyte DPoP, or internalAuthMiddleware).
 func (a *App) SetAuthMiddleware(mw azugo.RequestHandlerFunc) { a.authMW = mw }
+
+// Now is the serving clock, in UTC. Handlers read the time through this rather
+// than directly, so a response that carries a time-dependent field can be made
+// reproducible by pinning it.
+func (a *App) Now() time.Time {
+	if a.clock == nil {
+		return time.Now().UTC()
+	}
+	return a.clock().UTC()
+}
+
+// SetClock pins the serving clock. Test use only — it exists so a response
+// whose body depends on the current time can be asserted byte for byte;
+// production always runs on the real clock.
+func (a *App) SetClock(now func() time.Time) { a.clock = now }
