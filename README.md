@@ -312,6 +312,45 @@ Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics)
 | `egress.violation` | high | A TL pointer was non-https or outside the allow-list; the territory keeps serving last good data |
 | `authz.denied` | warning | A `/v1` request lacked the required `trust:<level>` scope |
 
+### Logs to monitor
+
+The table above is the catalogue; this is the operating guidance. A trust service fails in a way
+that looks like success — it keeps answering, with data that is old, incomplete, or carried over
+from before an operator's edit. **Nothing here surfaces as an error to a caller**, so if these
+events are not watched, the first symptom is a citizen's card that will not authenticate, or a
+signature validated against a certificate authority that was withdrawn weeks ago.
+
+Alert on these — each one means trust decisions are being made on data you would not choose:
+
+| Event | Why it matters | What to do |
+|---|---|---|
+| `trust.stale` | Anchors are being served past the publisher's own `NextUpdate` plus grace. The data is not wrong yet; it is no longer vouched for. | Check upstream reachability and the last successful refresh. A stale that persists past one refresh interval is an outage of the source, not a blip. |
+| `egress.violation` | A trusted-list pointer was non-HTTPS or outside the configured allow-list. Either the upstream list changed shape, or something is redirecting it. | Treat as potentially hostile until explained. The affected territory keeps serving its last good data, so there is time to look. |
+| `trust.internal_source_error` | The operator-declared source failed to load or validate, and **the previous set is being served instead**. The edit that was just deployed is not live. | Read the diagnostic, which names the offending entry. Until it is fixed, what is served is the state before the edit — which looks identical to a successful edit from the outside. |
+| `trust.refresh_failure` | A cycle failed; the last good snapshot is still served. | One is normal on a flaky network. A run of them means refreshes have silently stopped and staleness is next. |
+
+Review, do not alert:
+
+| Event | Why it matters |
+|---|---|
+| `trust.anchor_change` | The record of what changed and when — the first thing to read after any trust incident, and the only place a removed certificate authority is visible after the fact. High severity for add/remove, informational for metadata. |
+| `trust.pending_approved` | A held addition became active, and whether a human or the auto-release did it. |
+| `authz.denied` | Occasional entries are normal (a misconfigured client). A sustained pattern from one caller is worth understanding. |
+
+Two operating notes that are easy to learn the hard way:
+
+- **A first ingest emits many `trust.anchor_change` events at high severity.** That is a populated
+  bundle, not an incident. Alert on the *rate after steady state*, not on presence.
+- **Background events carry no request correlation id**, because refresh cycles run outside any
+  request. They are written to the service log in the same structured shape as request-scoped
+  events, so they are searchable by event type — just not joinable to a caller.
+
+If logs are collected with Loki, the whole stream for this service is:
+
+```logql
+{service_name="trust-anchor"} | json | event_type=~"trust\\..*|egress\\.violation|authz\\.denied"
+```
+
 ---
 
 ## Directory layout
