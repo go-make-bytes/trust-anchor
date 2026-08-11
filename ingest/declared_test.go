@@ -132,7 +132,7 @@ func TestRefreshDeclaredNoChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	next, changed, err := p.RefreshDeclared(s1, time.Now().UTC())
+	next, changed, _, err := p.RefreshDeclared(s1, time.Now().UTC())
 	if err != nil || changed || next != nil {
 		t.Fatalf("unchanged declared sources reported a change: next=%v changed=%v err=%v", next, changed, err)
 	}
@@ -169,7 +169,7 @@ func TestRefreshDeclaredActivatesEditedInternal(t *testing.T) {
 	dead := deadTransport()
 	p2 := declaredPipeline(t, dead, "", internal, zap.NewNop())
 
-	next, changed, err := p2.RefreshDeclared(s1, time.Now().UTC())
+	next, changed, _, err := p2.RefreshDeclared(s1, time.Now().UTC())
 	if err != nil || !changed || next == nil {
 		t.Fatalf("edited declared source not reconciled: changed=%v err=%v", changed, err)
 	}
@@ -217,7 +217,7 @@ func TestRefreshDeclaredCarriesOverBadEdit(t *testing.T) {
 	if err := os.WriteFile(internal, []byte("anchors: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	next, changed, err := p.RefreshDeclared(s1, time.Now().UTC())
+	next, changed, _, err := p.RefreshDeclared(s1, time.Now().UTC())
 	if err != nil || changed || next != nil {
 		t.Fatalf("bad edit produced a change: next=%v changed=%v err=%v", next, changed, err)
 	}

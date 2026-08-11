@@ -208,6 +208,13 @@ type Snapshot struct {
 	Pending []PendingAnchor `json:"pending,omitempty"`
 
 	Diff *Diff `json:"diff,omitempty"`
+
+	// DeclaredLoad reports the outcome of the declared-source loads of the
+	// cycle that built this snapshot (overlay + internal). Runtime-only
+	// diagnostics for the trust-inventory log: never serialized, never part
+	// of the content id — a load outcome describes one process's attempt,
+	// not the trust content itself.
+	DeclaredLoad *DeclaredReport `json:"-"`
 }
 
 // Territory returns the territory entry with the given code, or nil.

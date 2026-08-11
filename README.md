@@ -302,7 +302,22 @@ Upstream egress is confined to exactly the LOTL host and the TL hosts discovered
 
 ## Observability and security events
 
-Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics) is installed by the platform kit via `platform.Setup`; upstream fetches run through an instrumented HTTP transport so LOTL and national-TL requests appear as client spans. The service registers **no custom application metrics** of its own — its operationally meaningful signals are **security events**, emitted through `go-sec-events` to the SIEM stream (and mirrored to the service log for background-task emissions where no request context exists):
+Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics) is installed by the platform kit via `platform.Setup`; upstream fetches run through an instrumented HTTP transport so LOTL and national-TL requests appear as client spans. The service's operationally meaningful signals split three ways, each in the medium that fits it: **freshness and volume are metrics** (the alerting layer — see below), **identity is the API** (`GET /v1/snapshot` names the served snapshot; the snapshot id is deliberately never a metric label, because ids churn a new time series per value), and **transitions and detail are structured log events** — security events emitted through `go-sec-events` to the SIEM stream (mirrored to the service log for background-task emissions where no request context exists), plus the trust-inventory line described after them.
+
+### Metrics
+
+Registered on the same process-wide registry the HTTP server serves at the metrics endpoint, so
+`curl :PORT/metrics` works on a bare box during an incident. All label values are low-cardinality
+by construction (source tags, territory codes, the closed anchor-type taxonomy).
+
+| Metric | Type | Meaning |
+|---|---|---|
+| `trust_snapshot_age_seconds` | gauge (computed at scrape) | Age of the served snapshot. `-1` means nothing is served yet |
+| `trust_sync_last_success_timestamp_seconds` | gauge | Unix time of the last successful refresh cycle. `0` until the first success — `time() - value` alerting catches both "never" and "stopped" |
+| `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `manual-overlay` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
+| `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of that operator-declared source (`overlay` / `internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
+
+### Security events
 
 | Event | Severity | When |
 |---|---|---|
@@ -314,6 +329,25 @@ Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics)
 | `trust.overlay_source_error` | warning | `TRUST_EXTRA_ANCHORS_PATH` failed to load; the previous overlay set is carried over |
 | `egress.violation` | high | A TL pointer was non-https or outside the allow-list; the territory keeps serving last good data |
 | `authz.denied` | warning | A `/v1` request lacked the required `trust:<level>` scope |
+
+### The trust-inventory log line
+
+One structured `trust inventory` line is written at startup and on any change to the declared
+set, under the rule **declared trust is named, derived trust is counted**: every operator-declared
+anchor (internal source and overlay) is listed in full — `name`, `type`, `territory`, `status`,
+`sha256`, `validUntil` — because a declaration exists in one file on one disk and the log is its
+only other record; trusted-list anchors appear as per-territory and per-type counts, because each
+one is in a published, signed, re-fetchable list. Subjects and fingerprints are non-sensitive
+provenance; certificate material never appears.
+
+Each declared source carries a state field that keeps three outcomes apart which look identical
+from outside:
+
+| `internal_state` / `overlay_state` | Meaning |
+|---|---|
+| `not_configured` | The source path is unset — the feature is off |
+| `ok` | The file loaded; `*_count` says how many anchors it declared (0 is a valid answer) |
+| `carried_over` | **The trap.** The file failed to load and the previous set is still being served — from outside this reads exactly like a successful edit. `*_error` says why |
 
 ### Logs to monitor
 

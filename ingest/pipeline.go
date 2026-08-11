@@ -125,54 +125,72 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 // fail-safe the territories have) and the source's security event is
 // emitted, because a typo in an operator file must not take down
 // trusted-list ingestion. One shared path for both sources, so their
-// failure postures cannot drift apart.
-func (p *Pipeline) applyDeclaredSources(prev, next *trust.Snapshot, now time.Time) {
+// failure postures cannot drift apart. The returned report (also attached
+// to next) keeps the load outcomes distinguishable for the inventory log —
+// a carry-over produces the same anchor set as an unchanged file, and only
+// the report can tell them apart.
+func (p *Pipeline) applyDeclaredSources(prev, next *trust.Snapshot, now time.Time) trust.DeclaredReport {
 	var prevOverlay, prevInternal []trust.Anchor
 	if prev != nil {
 		prevOverlay, prevInternal = prev.Overlay, prev.Internal
 	}
-	next.Overlay = p.declaredSet("extra anchors overlay", prevOverlay,
+	var rep trust.DeclaredReport
+	next.Overlay, rep.Overlay = p.declaredSet("extra anchors overlay", declaredSourceOverlay,
+		p.cfg.ExtraAnchorsPath != "", prevOverlay,
 		func() ([]trust.Anchor, error) { return trust.LoadOverlay(p.cfg.ExtraAnchorsPath) },
 		func(err error) { p.events.OverlaySourceError(nil, err) })
-	next.Internal = p.declaredSet("internal trust source", prevInternal,
+	next.Internal, rep.Internal = p.declaredSet("internal trust source", declaredSourceInternal,
+		p.cfg.InternalTrustSource != "", prevInternal,
 		func() ([]trust.Anchor, error) { return trust.LoadInternal(p.cfg.InternalTrustSource, now) },
 		func(err error) { p.events.InternalSourceError(nil, err) })
+	next.DeclaredLoad = &rep
+	return rep
 }
 
 // declaredSet loads one operator-declared anchor set; on failure it returns
-// the previous set unchanged (carry-over) after emitting the source's event.
-func (p *Pipeline) declaredSet(name string, prevSet []trust.Anchor, load func() ([]trust.Anchor, error), emit func(error)) []trust.Anchor {
+// the previous set unchanged (carry-over) after emitting the source's event
+// and raising the source's 0/1 failure gauge.
+func (p *Pipeline) declaredSet(name, key string, configured bool, prevSet []trust.Anchor, load func() ([]trust.Anchor, error), emit func(error)) ([]trust.Anchor, trust.DeclaredSourceState) {
+	state := trust.DeclaredSourceState{Configured: configured}
 	set, err := load()
 	if err != nil {
 		emit(err)
 		p.log.Warn(name+" failed to load — carrying over last good set", zap.Error(err))
-		return prevSet
+		setDeclaredSourceFailed(key, true)
+		state.CarriedOver = true
+		state.Error = err.Error()
+		state.Count = len(prevSet)
+		return prevSet, state
 	}
-	return set
+	setDeclaredSourceFailed(key, false)
+	state.Count = len(set)
+	return set, state
 }
 
 // RefreshDeclared rebuilds prev with freshly loaded operator-declared
 // sources and no upstream fetch — the boot / on-demand reconcile, so an
 // edited declaration takes effect even while the trusted-list upstream is
-// unreachable. Returns (nil, false, nil) when the declared sets are
-// unchanged. prev must not be nil: with nothing to build on, first
-// activation belongs to a full cycle.
-func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, error) {
+// unreachable. Returns a nil snapshot when the declared sets are unchanged;
+// the report is returned even then, because "unchanged" covers both an
+// identical file and a failed load whose carry-over reproduced the previous
+// set — outcomes the caller must be able to tell apart. prev must not be
+// nil: with nothing to build on, first activation belongs to a full cycle.
+func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, trust.DeclaredReport, error) {
 	if prev == nil {
-		return nil, false, errors.New("ingest: declared-source reconcile requires a previous snapshot")
+		return nil, false, trust.DeclaredReport{}, errors.New("ingest: declared-source reconcile requires a previous snapshot")
 	}
 	next, err := cloneSnapshot(prev)
 	if err != nil {
-		return nil, false, err
+		return nil, false, trust.DeclaredReport{}, err
 	}
-	p.applyDeclaredSources(prev, next, now)
+	rep := p.applyDeclaredSources(prev, next, now)
 	if next.ComputeID() == prev.ID {
-		return nil, false, nil
+		return nil, false, rep, nil
 	}
 	next.GeneratedAt = now
 	next.PrevID = prev.ID
 	next.Diff = trust.ComputeDiff(prev, next)
-	return next, true, nil
+	return next, true, rep, nil
 }
 
 // ingestLOTL fetches and verifies the LOTL, processing the pivot chain when

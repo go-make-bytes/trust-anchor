@@ -34,16 +34,16 @@ func (f *fakeRefresher) Refresh(_ context.Context, prev *trust.Snapshot, _ *trus
 	return snap, nil
 }
 
-func (f *fakeRefresher) RefreshDeclared(prev *trust.Snapshot, _ time.Time) (*trust.Snapshot, bool, error) {
+func (f *fakeRefresher) RefreshDeclared(prev *trust.Snapshot, _ time.Time) (*trust.Snapshot, bool, trust.DeclaredReport, error) {
 	if f.declared == nil {
-		return nil, false, nil
+		return nil, false, trust.DeclaredReport{}, nil
 	}
 	next := f.declared
 	if prev != nil {
 		next.PrevID = prev.ID
 	}
 	next.Diff = trust.ComputeDiff(prev, next)
-	return next, true, nil
+	return next, true, trust.DeclaredReport{}, nil
 }
 
 func managerForTest(t *testing.T, r Refresher) (*Manager, *store.Memory) {

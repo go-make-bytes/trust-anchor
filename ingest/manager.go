@@ -23,7 +23,7 @@ import (
 // fetch.
 type Refresher interface {
 	Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error)
-	RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, error)
+	RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, trust.DeclaredReport, error)
 }
 
 // Manager owns the active snapshot and bootstrap state: startup bootstrap
@@ -44,15 +44,26 @@ type Manager struct {
 	kick chan struct{}
 }
 
-// NewManager builds a Manager.
+// NewManager builds a Manager and points the freshness gauges at it.
 func NewManager(pipeline Refresher, st store.Store, ev *events.Emitter, log *zap.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		pipeline: pipeline,
 		store:    st,
 		events:   ev,
 		log:      log,
 		kick:     make(chan struct{}, 1),
 	}
+	registerAgeGauge()
+	activeSnapshotFn.Store((func() *trust.Snapshot)(m.Active))
+	return m
+}
+
+// activate makes next the served snapshot and recomputes the volume gauges
+// from it. Every activation site goes through here so the gauges can never
+// lag what is actually served.
+func (m *Manager) activate(next *trust.Snapshot) {
+	m.active.Store(next)
+	setAnchorGauges(next)
 }
 
 // Initialize loads the persisted bootstrap + snapshot. When the store has no
@@ -88,7 +99,7 @@ func (m *Manager) Initialize(ctx context.Context, seedPath string) error {
 		return fmt.Errorf("ingest: load snapshot from store: %w", err)
 	}
 	if snap != nil {
-		m.active.Store(snap)
+		m.activate(snap)
 		m.log.Info("restored snapshot from store",
 			zap.String("snapshot", snap.ID), logUint("lotl_sequence", snap.LOTLSequence))
 	}
@@ -131,27 +142,34 @@ func (m *Manager) ReconcileDeclared(ctx context.Context) bool {
 	ctx = context.WithoutCancel(ctx)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, changed := m.reconcileDeclared(ctx, m.active.Load())
+	_, changed, rep := m.reconcileDeclared(ctx, m.active.Load())
+	// Boot inventory: logged unconditionally, changed or not — a restart is
+	// the moment an operator most needs the served declared set named, and
+	// an "unchanged" result can hide a failed load whose carry-over
+	// reproduced the previous set.
+	if active := m.active.Load(); active != nil {
+		logInventory(m.log, active, rep)
+	}
 	return changed
 }
 
 // reconcileDeclared re-reads the declared sources against prev and, when
 // they changed, persists and activates the rebuilt snapshot. Returns the
-// snapshot subsequent work should build on and whether anything changed.
-// The caller holds m.mu.
-func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (*trust.Snapshot, bool) {
+// snapshot subsequent work should build on, whether anything changed, and
+// the per-source load report. The caller holds m.mu.
+func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (*trust.Snapshot, bool, trust.DeclaredReport) {
 	if prev == nil {
 		// Nothing restored or served yet — first activation belongs to the
 		// full cycle.
-		return nil, false
+		return nil, false, trust.DeclaredReport{}
 	}
-	next, changed, err := m.pipeline.RefreshDeclared(prev, time.Now().UTC())
+	next, changed, rep, err := m.pipeline.RefreshDeclared(prev, time.Now().UTC())
 	if err != nil {
 		m.log.Error("declared-source reconcile failed — keeping current snapshot", zap.Error(err))
-		return prev, false
+		return prev, false, rep
 	}
 	if !changed {
-		return prev, false
+		return prev, false, rep
 	}
 	if err := m.store.SaveSnapshot(ctx, next); err != nil {
 		// Serving fresh declared data beats failing the reconcile; the next
@@ -159,7 +177,7 @@ func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (
 		m.events.RefreshFailure(nil, "persist", err.Error())
 		m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
 	}
-	m.active.Store(next)
+	m.activate(next)
 	if !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
 			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
@@ -167,7 +185,7 @@ func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (
 	}
 	m.log.Info("operator-declared sources reconciled into a new snapshot",
 		zap.String("snapshot", next.ID), zap.String("previous", prev.ID))
-	return next, true
+	return next, true, rep
 }
 
 // Refresh runs one ingestion cycle. On failure the previous snapshot stays
@@ -187,7 +205,10 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 	// Declared sources first: an operator edit takes effect on this trigger
 	// even when the upstream fetch below fails — that error path would
 	// otherwise return before the cycle's own declared load ever runs.
-	prev, declaredChanged := m.reconcileDeclared(ctx, prev)
+	prev, declaredChanged, declRep := m.reconcileDeclared(ctx, prev)
+	if declaredChanged {
+		logInventory(m.log, prev, declRep)
+	}
 
 	next, err := m.pipeline.Refresh(ctx, prev, boot)
 	if err != nil {
@@ -209,7 +230,18 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 			m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
 		}
 	}
-	m.active.Store(next)
+	m.activate(next)
+	setLastSyncSuccess(time.Now().UTC())
+	if prev == nil {
+		// First activation: the declared set went from nothing to something
+		// and there is no other record of it — log the inventory from the
+		// cycle's own load report.
+		rep := trust.DeclaredReport{}
+		if next.DeclaredLoad != nil {
+			rep = *next.DeclaredLoad
+		}
+		logInventory(m.log, next, rep)
+	}
 
 	if cycleChanged && !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
@@ -282,7 +314,7 @@ func (m *Manager) ApprovePending(ctx *azugo.Context, fingerprint, actor string) 
 	if err := m.store.SaveSnapshot(detach(ctx), next); err != nil {
 		return nil, fmt.Errorf("ingest: persist approved snapshot: %w", err)
 	}
-	m.active.Store(next)
+	m.activate(next)
 
 	m.events.PendingApproved(ctx, fingerprint, actor, "api")
 	a := approved.Anchor
