@@ -138,7 +138,7 @@ func serviceQualifications(exts []tsl.Extension) (qualifiers []string, uses []st
 				addUse(UseSignature)
 			case tsl.ASIForeSeals:
 				addUse(UseSeal)
-			case tsl.ASIForeWebSiteAuthentication:
+			case tsl.ASIForWebSiteAuthentication:
 				addUse(UseWebsite)
 			}
 		}

@@ -33,9 +33,9 @@ const (
 
 	QualifierQCWithQSCD = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCWithQSCD"
 
-	ASIForeSignatures            = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures"
-	ASIForeSeals                 = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSeals"
-	ASIForeWebSiteAuthentication = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeWebSiteAuthentication"
+	ASIForeSignatures           = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures"
+	ASIForeSeals                = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSeals"
+	ASIForWebSiteAuthentication = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForWebSiteAuthentication"
 )
 
 // TrustedList is the parsed TrustServiceStatusList document (LOTL, pivot or

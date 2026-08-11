@@ -38,7 +38,7 @@ func ValidAnchorType(t string) bool { return AnchorTypes[t] }
 // alias of `signature`: eID authentication certificates chain to the same
 // CA/QC services as signature certificates and TS 119 612 defines no
 // authentication qualifier (see DECISIONS.md). `website` maps
-// ForeWebSiteAuthentication (QWACs).
+// ForWebSiteAuthentication (QWACs).
 const (
 	UseSignature      = "signature"
 	UseAuthentication = "authentication"

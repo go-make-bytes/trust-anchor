@@ -8,6 +8,8 @@ It is a **shared service with two independent consumers**. The eIDAS **signing p
 
 It renders no human UI. It is an Azugo service; cross-cutting concerns (tracing, log redaction, correlation, metrics) are installed once by the platform kit.
 
+The standards and legal acts cited here and in the source — with the exact editions the claims were checked against — are pinned in [`SPECREFS.md`](SPECREFS.md).
+
 ---
 
 ## Where it sits
@@ -74,7 +76,7 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 **Bundle filters** (shared by both `/v1/anchors*` routes, all optional):
 
 - `territory=LV,EE` — comma-separated ISO 3166-1 alpha-2 codes; default all.
-- `use=signature | authentication | seal | website` — mapped from the service's `AdditionalServiceInformation` "Fore*" qualifiers; a service with no such qualifier is included in **all** uses (the TS 119 612 default). `authentication` is served as an alias of `signature` (eID authentication certificates chain to the same CA/QC services, and TS 119 612 defines no distinct authentication qualifier). `website` maps the QWAC qualifier.
+- `use=signature | authentication | seal | website` — mapped from the service's `AdditionalServiceInformation` URIs (`ForeSignatures` / `ForeSeals` / `ForWebSiteAuthentication`, [ETSI TS 119 612 V2.4.1 §5.5.9.4]); a service with no such qualifier is included in **all** uses (the TS 119 612 default). `authentication` is served as an alias of `signature` (eID authentication certificates chain to the same CA/QC services, and TS 119 612 defines no distinct authentication qualifier). `website` maps the QWAC qualifier.
 - `qscdOnly=true` — restrict to `QCWithQSCD`-qualified services.
 - `type=<eudi-anchor-type>` — **additive** filter selecting a typed EUDI anchor (see [The internal trust source](#the-internal-trust-source--operator-declared-eudi-anchors)); omitted means legacy untyped CA/QC anchors only. Unknown values are rejected (fail closed).
 

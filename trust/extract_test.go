@@ -147,6 +147,29 @@ func TestExtractAnchorsStatusFilter(t *testing.T) {
 	}
 }
 
+// TestServiceQualificationsUseMapping pins the use derivation to the
+// registered additionalServiceInformation URIs
+// [ETSI TS 119 612 V2.4.1 §5.5.9.4]. The URIs are spelled out as literals on
+// purpose: the wire values come from the standard, so a drifted constant
+// fails here instead of silently matching nothing on a real trusted list.
+func TestServiceQualificationsUseMapping(t *testing.T) {
+	exts := []tsl.Extension{
+		{AdditionalServiceInformation: &tsl.ASI{URI: "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures"}},
+		{AdditionalServiceInformation: &tsl.ASI{URI: "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSeals"}},
+		{AdditionalServiceInformation: &tsl.ASI{URI: "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForWebSiteAuthentication"}},
+	}
+	_, uses, _ := serviceQualifications(exts)
+	want := []string{UseSignature, UseSeal, UseWebsite}
+	if len(uses) != len(want) {
+		t.Fatalf("uses = %v, want %v", uses, want)
+	}
+	for i := range want {
+		if uses[i] != want[i] {
+			t.Errorf("uses[%d] = %q, want %q", i, uses[i], want[i])
+		}
+	}
+}
+
 func TestNormalizeStatus(t *testing.T) {
 	if got := NormalizeStatus("granted"); got != "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted" {
 		t.Errorf("NormalizeStatus(granted) = %q", got)
