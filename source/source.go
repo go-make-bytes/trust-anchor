@@ -28,8 +28,6 @@ const (
 	TypeWalletProviderTL  Type = "wallet-provider-list"
 	TypeCertifiedWalletTL Type = "certified-wallet-list" // CIR 2025/849
 	TypeQTSPTL            Type = "qtsp-tl"
-	// Operator-controlled.
-	TypeManualOverlay Type = "manual-overlay"
 	// Registry-shaped — NOT a CA bundle; see RegistrySource.
 	TypeRPRegistry Type = "rp-registry" // CIR 2025/848
 )

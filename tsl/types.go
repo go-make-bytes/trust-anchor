@@ -32,6 +32,10 @@ const (
 	StatusGranted = "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"
 
 	QualifierQCWithQSCD = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCWithQSCD"
+	// QualifierQCQSCDManagedOnBehalf marks a QSCD managed on the subscriber's
+	// behalf (remote/cloud qualified signing) — QSCD-positive in the QSCD
+	// determination exactly like QCWithQSCD.
+	QualifierQCQSCDManagedOnBehalf = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCQSCDManagedOnBehalf"
 
 	ASIForeSignatures           = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures"
 	ASIForeSeals                = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSeals"

@@ -3,6 +3,7 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +77,7 @@ func TestBootInventoryNamesCarriedOverAnchors(t *testing.T) {
 	}
 
 	core, logs := observer.New(zap.InfoLevel)
-	p := declaredPipeline(t, deadTransport(), "", internal, zap.New(core))
+	p := declaredPipeline(t, deadTransport(), internal, zap.New(core))
 	st := store.NewMemory()
 	m := NewManager(p, st, events.New(zap.NewNop()), zap.New(core))
 	seedBootstrap(t, st)
@@ -129,7 +130,7 @@ func TestBootInventoryDistinguishesZeroAnchorsFromUnset(t *testing.T) {
 		t.Fatal(err)
 	}
 	core, logs := observer.New(zap.InfoLevel)
-	p := declaredPipeline(t, deadTransport(), "", internal, zap.New(core))
+	p := declaredPipeline(t, deadTransport(), internal, zap.New(core))
 	st := store.NewMemory()
 	m := NewManager(p, st, events.New(zap.NewNop()), zap.New(core))
 	seedBootstrap(t, st)
@@ -159,7 +160,7 @@ func TestBootInventoryDistinguishesZeroAnchorsFromUnset(t *testing.T) {
 
 	// (b) not configured at all.
 	core2, logs2 := observer.New(zap.InfoLevel)
-	p2 := declaredPipeline(t, deadTransport(), "", "", zap.New(core2))
+	p2 := declaredPipeline(t, deadTransport(), "", zap.New(core2))
 	st2 := store.NewMemory()
 	m2 := NewManager(p2, st2, events.New(zap.NewNop()), zap.New(core2))
 	seedBootstrap(t, st2)
@@ -192,7 +193,7 @@ func TestRefreshSetsFreshnessAndVolumeGauges(t *testing.T) {
 	}
 
 	core, logs := observer.New(zap.InfoLevel)
-	p := declaredPipeline(t, newFixtureTransport(), "", internal, zap.New(core))
+	p := declaredPipeline(t, newFixtureTransport(), internal, zap.New(core))
 	st := store.NewMemory()
 	m := NewManager(p, st, events.New(zap.NewNop()), zap.New(core))
 	if err := st.SaveBootstrap(context.Background(), fixtureBootstrap(t, "eu-lotl-pivot-378.xml")); err != nil {
@@ -271,5 +272,27 @@ func TestAnchorGaugeSeriesZeroedWhenGone(t *testing.T) {
 	}
 	if v, ok := metricValue(buf, `trust_anchors_total{source="internal",territory="EE",type="wallet_provider"}`); !ok || v != 1 {
 		t.Fatalf("series for snapshot b = %v (present=%v), want 1", v, ok)
+	}
+}
+
+// A declared anchor whose type's mandated channel is an unpublished EU LoTE
+// is marked in the inventory — the declaration stands in for a list, and
+// the marker is what keeps that gap visible.
+func TestInventoryMarksDeclaredPendingLoTE(t *testing.T) {
+	anchors := inventoryAnchors([]trust.Anchor{
+		{TSPName: "PID CA", Type: "pid_provider", FingerprintSHA256: "aa"},
+		{TSPName: "QEAA CA", Type: "qeaa_provider", FingerprintSHA256: "bb"},
+		{TSPName: "Card CA", Type: "", FingerprintSHA256: "cc"},
+	})
+	b, err := json.Marshal(anchors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"name":"PID CA","type":"pid_provider"`) || !strings.Contains(s, `"declaredPendingLote":true`) {
+		t.Fatalf("pid_provider anchor not marked declaredPendingLote: %s", s)
+	}
+	if strings.Count(s, `"declaredPendingLote":true`) != 1 {
+		t.Fatalf("only the LoTE-borne type may carry the marker: %s", s)
 	}
 }

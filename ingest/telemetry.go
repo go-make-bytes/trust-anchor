@@ -26,11 +26,8 @@ const (
 	metricDeclaredFailed = "trust_declared_source_failed"
 )
 
-// Declared-source keys used as the `source` label value and in load reports.
-const (
-	declaredSourceOverlay  = "overlay"
-	declaredSourceInternal = "internal"
-)
+// Declared-source key used as the `source` label value and in load reports.
+const declaredSourceInternal = "internal"
 
 // activeSnapshotFn feeds the age gauge. It is process-global (the metrics
 // registry is), swapped by each NewManager so the gauge always reads the
@@ -90,9 +87,6 @@ func setAnchorGauges(s *trust.Snapshot) {
 			for _, a := range t.Anchors {
 				counts[series(a.Source, t.Code, a.Type)]++
 			}
-		}
-		for _, a := range s.Overlay {
-			counts[series(a.Source, a.Territory, a.Type)]++
 		}
 		for _, a := range s.Internal {
 			counts[series(a.Source, a.Territory, a.Type)]++

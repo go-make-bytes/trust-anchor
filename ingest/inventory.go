@@ -10,33 +10,32 @@ import (
 
 // inventoryAnchor is the per-anchor projection logged for declared trust.
 // Subjects and fingerprints are non-sensitive provenance; the certificate
-// itself never appears.
+// itself never appears. PendingLoTE marks a type whose mandated
+// distribution channel is an EU LoTE that has not been published yet: the
+// declaration is standing in for a list, and the inventory is where that
+// gap stays visible instead of silently normalized.
 type inventoryAnchor struct {
-	Name       string    `json:"name"`
-	Type       string    `json:"type,omitempty"`
-	Territory  string    `json:"territory,omitempty"`
-	Status     string    `json:"status"`
-	SHA256     string    `json:"sha256"`
-	ValidUntil time.Time `json:"validUntil"`
+	Name        string    `json:"name"`
+	Type        string    `json:"type,omitempty"`
+	Territory   string    `json:"territory,omitempty"`
+	Status      string    `json:"status"`
+	SHA256      string    `json:"sha256"`
+	ValidUntil  time.Time `json:"validUntil"`
+	PendingLoTE bool      `json:"declaredPendingLote,omitempty"`
 }
 
 // inventoryAnchors projects a declared anchor set for logging.
 func inventoryAnchors(anchors []trust.Anchor) []inventoryAnchor {
 	out := make([]inventoryAnchor, 0, len(anchors))
 	for _, a := range anchors {
-		name := a.TSPName
-		if a.Source == trust.SourceOverlay {
-			// Overlay anchors all carry the same constant TSP name; the
-			// certificate subject CN is the identifying half.
-			name = a.ServiceName
-		}
 		out = append(out, inventoryAnchor{
-			Name:       name,
-			Type:       a.Type,
-			Territory:  a.Territory,
-			Status:     a.Status,
-			SHA256:     a.FingerprintSHA256,
-			ValidUntil: a.NotAfter,
+			Name:        a.TSPName,
+			Type:        a.Type,
+			Territory:   a.Territory,
+			Status:      a.Status,
+			SHA256:      a.FingerprintSHA256,
+			ValidUntil:  a.NotAfter,
+			PendingLoTE: trust.TypeAwaitsLoTE(a.Type),
 		})
 	}
 	return out
@@ -67,8 +66,6 @@ func logInventory(log *zap.Logger, s *trust.Snapshot, rep trust.DeclaredReport) 
 		zap.String("snapshot", s.ID),
 		zap.String("internal_state", rep.Internal.State()),
 		zap.Int("internal_count", len(s.Internal)),
-		zap.String("overlay_state", rep.Overlay.State()),
-		zap.Int("overlay_count", len(s.Overlay)),
 		zap.Any("derived_territory_counts", derivedByTerritory),
 		zap.Any("derived_type_counts", derivedByType),
 		zap.Int("pending_count", len(s.Pending)),
@@ -76,14 +73,8 @@ func logInventory(log *zap.Logger, s *trust.Snapshot, rep trust.DeclaredReport) 
 	if rep.Internal.Error != "" {
 		fields = append(fields, zap.String("internal_error", rep.Internal.Error))
 	}
-	if rep.Overlay.Error != "" {
-		fields = append(fields, zap.String("overlay_error", rep.Overlay.Error))
-	}
 	if len(s.Internal) > 0 {
 		fields = append(fields, zap.Any("internal_anchors", inventoryAnchors(s.Internal)))
-	}
-	if len(s.Overlay) > 0 {
-		fields = append(fields, zap.Any("overlay_anchors", inventoryAnchors(s.Overlay)))
 	}
 	log.Info("trust inventory", fields...)
 }

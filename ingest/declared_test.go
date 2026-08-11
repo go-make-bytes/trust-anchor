@@ -37,7 +37,7 @@ const internalOneAnchor = `anchors:
 `
 
 // declaredPipeline builds a hermetic pipeline with declared-source paths set.
-func declaredPipeline(t *testing.T, ft *fixtureTransport, overlayPath, internalPath string, log *zap.Logger) *Pipeline {
+func declaredPipeline(t *testing.T, ft *fixtureTransport, internalPath string, log *zap.Logger) *Pipeline {
 	t.Helper()
 	fetcher := NewFetcher(10*time.Second, 20*1024*1024)
 	fetcher.SetTransport(ft)
@@ -46,7 +46,6 @@ func declaredPipeline(t *testing.T, ft *fixtureTransport, overlayPath, internalP
 		Territories:         []string{"LV"},
 		AcceptedStatuses:    []string{"granted"},
 		ActivationMode:      ModeAuto,
-		ExtraAnchorsPath:    overlayPath,
 		InternalTrustSource: internalPath,
 		StaleGrace:          24 * time.Hour,
 	}
@@ -80,43 +79,6 @@ func eventObserved(logs *observer.ObservedLogs, eventType string) bool {
 	return false
 }
 
-// A bad overlay edit must not fail the cycle: the previous overlay set is
-// carried over and trust.overlay_source_error is emitted — the same posture
-// the internal source and the territories already have.
-func TestRefreshOverlayCarryOverOnBadEdit(t *testing.T) {
-	dir := t.TempDir()
-	overlay := filepath.Join(dir, "extra.pem")
-	if err := os.WriteFile(overlay, readTestdata(t, "internal-ca-two.pem"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	core, logs := observer.New(zap.InfoLevel)
-	p := declaredPipeline(t, newFixtureTransport(), overlay, "", zap.New(core))
-	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
-
-	s1, err := p.Refresh(context.Background(), nil, boot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(s1.Overlay) != 1 {
-		t.Fatalf("overlay anchors = %d, want 1", len(s1.Overlay))
-	}
-
-	if err := os.WriteFile(overlay, []byte("not a certificate"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	s2, err := p.Refresh(context.Background(), s1, boot)
-	if err != nil {
-		t.Fatalf("cycle failed on a bad overlay edit (must carry over): %v", err)
-	}
-	if len(s2.Overlay) != 1 || s2.Overlay[0].FingerprintSHA256 != s1.Overlay[0].FingerprintSHA256 {
-		t.Fatalf("previous overlay set not carried over: %+v", s2.Overlay)
-	}
-	if !eventObserved(logs, events.EventOverlaySourceError) {
-		t.Fatal("trust.overlay_source_error not emitted")
-	}
-}
-
 // An unchanged declared configuration reconciles to no new snapshot.
 func TestRefreshDeclaredNoChange(t *testing.T) {
 	dir := t.TempDir()
@@ -125,7 +87,7 @@ func TestRefreshDeclaredNoChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := declaredPipeline(t, newFixtureTransport(), "", internal, zap.NewNop())
+	p := declaredPipeline(t, newFixtureTransport(), internal, zap.NewNop())
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 	s1, err := p.Refresh(context.Background(), nil, boot)
 	if err != nil {
@@ -152,7 +114,7 @@ func TestRefreshDeclaredActivatesEditedInternal(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "internal-ca-two.pem"), readTestdata(t, "internal-ca-two.pem"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	p1 := declaredPipeline(t, newFixtureTransport(), "", internal, zap.NewNop())
+	p1 := declaredPipeline(t, newFixtureTransport(), internal, zap.NewNop())
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 	s1, err := p1.Refresh(context.Background(), nil, boot)
 	if err != nil {
@@ -167,7 +129,7 @@ func TestRefreshDeclaredActivatesEditedInternal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dead := deadTransport()
-	p2 := declaredPipeline(t, dead, "", internal, zap.NewNop())
+	p2 := declaredPipeline(t, dead, internal, zap.NewNop())
 
 	next, changed, _, err := p2.RefreshDeclared(s1, time.Now().UTC())
 	if err != nil || !changed || next == nil {
@@ -207,7 +169,7 @@ func TestRefreshDeclaredCarriesOverBadEdit(t *testing.T) {
 	}
 
 	core, logs := observer.New(zap.InfoLevel)
-	p := declaredPipeline(t, newFixtureTransport(), "", internal, zap.New(core))
+	p := declaredPipeline(t, newFixtureTransport(), internal, zap.New(core))
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 	s1, err := p.Refresh(context.Background(), nil, boot)
 	if err != nil {
@@ -236,7 +198,7 @@ func TestManagerReconcileDeclaredActivatesEditedFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p := declaredPipeline(t, deadTransport(), "", internal, zap.NewNop())
+	p := declaredPipeline(t, deadTransport(), internal, zap.NewNop())
 	st := store.NewMemory()
 	m := NewManager(p, st, events.New(zap.NewNop()), zap.NewNop())
 	seedBootstrap(t, st)

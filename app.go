@@ -110,14 +110,14 @@ func (a *App) init() error {
 
 	fetcher := ingest.NewFetcher(cfg.FetchTimeout, cfg.MaxTLBytes)
 	pipeline := ingest.NewPipeline(ingest.Config{
-		LOTLURL:             cfg.LOTLURL,
-		Territories:         cfg.Territories(),
-		AcceptedStatuses:    cfg.AcceptedStatuses(),
-		ActivationMode:      cfg.ActivationMode,
-		HoldAutoRelease:     cfg.HoldAutoRelease,
-		ExtraAnchorsPath:    cfg.ExtraAnchorsPath,
-		InternalTrustSource: cfg.InternalTrustSource,
-		StaleGrace:          cfg.StaleGrace,
+		LOTLURL:              cfg.LOTLURL,
+		Territories:          cfg.Territories(),
+		AcceptedStatuses:     cfg.AcceptedStatuses(),
+		AcceptedServiceTypes: cfg.AcceptedServiceTypes(),
+		ActivationMode:       cfg.ActivationMode,
+		HoldAutoRelease:      cfg.HoldAutoRelease,
+		InternalTrustSource:  cfg.InternalTrustSource,
+		StaleGrace:           cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())
 	a.manager = ingest.NewManager(pipeline, a.store, a.events, a.Log())
 

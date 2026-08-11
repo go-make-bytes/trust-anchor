@@ -53,7 +53,7 @@ func TestLoadInternalValid(t *testing.T) {
 	if one.Status != grantedStatusURI {
 		t.Errorf("Status = %q, want default granted URI %q", one.Status, grantedStatusURI)
 	}
-	if one.ServiceType != serviceTypeURIFor("pid_provider") || one.ServiceType == "" {
+	if one.ServiceType != TypeIdentifier("pid_provider") || one.ServiceType == "" {
 		t.Errorf("ServiceType = %q", one.ServiceType)
 	}
 	if len(one.UseCases) != 1 || one.UseCases[0] != "pid-issuance" {

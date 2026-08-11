@@ -23,7 +23,4 @@ func TestNewSnapshotInternalCount(t *testing.T) {
 	if out.InternalCount != 2 {
 		t.Errorf("InternalCount = %d, want 2", out.InternalCount)
 	}
-	if out.OverlayCount != 0 {
-		t.Errorf("OverlayCount = %d, want 0 (no overlay configured)", out.OverlayCount)
-	}
 }

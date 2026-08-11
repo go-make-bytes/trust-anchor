@@ -26,7 +26,10 @@ type internalFile struct {
 }
 
 // internalAnchor is one operator-declared entry. Exactly one of
-// Certificate/CertificateFile must be set.
+// Certificate/CertificateFile must be set. Type may be omitted (or set to
+// the explicit alias "tsl_ca"): the entry then lands in the untyped TSL
+// plane — a card/QC CA the EU list does not publish, served in the same
+// untyped bundle as trusted-list anchors.
 type internalAnchor struct {
 	Name            string    `yaml:"name"`
 	Type            string    `yaml:"type"`
@@ -38,45 +41,15 @@ type internalAnchor struct {
 	UseCases        []string  `yaml:"useCases"`
 }
 
+// untypedAlias is the explicit spelling of "no type": a declaration into the
+// untyped TSL plane. Both an absent type and this alias normalize to "".
+const untypedAlias = "tsl_ca"
+
 // errf formats a validation error naming this entry. Errors identify entries
 // by name (and fingerprint, once known) only — never by embedding file
 // contents or key material.
 func (e internalAnchor) errf(format string, args ...any) error {
 	return fmt.Errorf("trust: internal anchor %q: "+format, append([]any{e.Name}, args...)...)
-}
-
-// eudiServiceTypeSuffix maps every taxonomy value (AnchorTypes) to the
-// CamelCase suffix of its placeholder EUDI service-type URI. Table-driven
-// (not a switch) so a taxonomy addition without a matching row here is
-// visibly incomplete rather than silently falling through to a default.
-var eudiServiceTypeSuffix = map[string]string{
-	"pid_provider":            "PidProvider",
-	"qeaa_provider":           "QEAAProvider",
-	"pub_eaa_provider":        "PubEAAProvider",
-	"eaa_provider":            "EAAProvider",
-	"wallet_provider":         "WalletProvider",
-	"access_ca":               "AccessCA",
-	"wrprc_issuer":            "WRPRCIssuer",
-	"pid_provider_status":     "PidProviderStatus",
-	"qeaa_provider_status":    "QEAAProviderStatus",
-	"pub_eaa_provider_status": "PubEAAProviderStatus",
-	"eaa_provider_status":     "EAAProviderStatus",
-}
-
-const eudiServiceTypeBase = "http://uri.etsi.org/TrstSvc/Svctype/EUDI/"
-
-// serviceTypeURIFor maps the taxonomy onto placeholder EUDI service-type
-// URIs (consistent with the consumer's mock fixtures; real URIs pending
-// CID (EU) 2025/2164 — extension E1). Informational only: the consumer
-// filters by the type= request param, never by this URI. Callers must
-// reject unknown types before calling this (ValidAnchorType) — an unmapped
-// type returns "".
-func serviceTypeURIFor(t string) string {
-	suffix, ok := eudiServiceTypeSuffix[t]
-	if !ok {
-		return ""
-	}
-	return eudiServiceTypeBase + suffix
 }
 
 // LoadInternal parses and validates the operator-declared anchor file named
@@ -131,9 +104,15 @@ func loadInternalBytes(raw []byte, baseDir string, now time.Time) ([]Anchor, err
 	return anchors, nil
 }
 
-// buildInternalAnchor validates one entry and builds its Anchor.
+// buildInternalAnchor validates one entry and builds its Anchor. An entry
+// with no type (or the explicit tsl_ca alias) lands in the untyped TSL
+// plane; a typed entry must name a known EUDI anchor type.
 func buildInternalAnchor(e internalAnchor, baseDir string, now time.Time) (Anchor, error) {
-	if !ValidAnchorType(e.Type) {
+	declaredType := strings.TrimSpace(e.Type)
+	if declaredType == untypedAlias {
+		declaredType = ""
+	}
+	if declaredType != "" && !ValidAnchorType(declaredType) {
 		return Anchor{}, e.errf("unknown type %q", e.Type)
 	}
 
@@ -178,7 +157,7 @@ func buildInternalAnchor(e internalAnchor, baseDir string, now time.Time) (Ancho
 		Source:             SourceInternal,
 		TSPName:            e.Name,
 		ServiceName:        cert.Subject.CommonName,
-		ServiceType:        serviceTypeURIFor(e.Type),
+		ServiceType:        TypeIdentifier(declaredType),
 		Status:             status,
 		StatusStartingTime: cert.NotBefore,
 		CertDER:            cert.Raw,
@@ -186,7 +165,7 @@ func buildInternalAnchor(e internalAnchor, baseDir string, now time.Time) (Ancho
 		Subject:            cert.Subject.String(),
 		NotBefore:          cert.NotBefore,
 		NotAfter:           notAfter,
-		Type:               e.Type,
+		Type:               declaredType,
 		UseCases:           e.UseCases,
 	}, nil
 }

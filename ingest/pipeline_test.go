@@ -3,7 +3,6 @@ package ingest
 import (
 	"bytes"
 	"context"
-	"encoding/pem"
 	"io"
 	"net/http"
 	"os"
@@ -408,45 +407,6 @@ func TestRefreshRemovalAppliesImmediatelyInHoldMode(t *testing.T) {
 	}
 }
 
-func TestRefreshOverlay(t *testing.T) {
-	dir := t.TempDir()
-
-	// Write one of the fixture LOTL signer certs as the overlay PEM.
-	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
-	certs, err := boot.Certificates()
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemPath := filepath.Join(dir, "demo.pem")
-	if err := os.WriteFile(pemPath, pemEncode(certs[0].Raw), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	p := testPipeline(t, newFixtureTransport(), ModeAuto)
-	p.cfg.ExtraAnchorsPath = pemPath
-
-	snap, err := p.Refresh(context.Background(), nil, boot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap.Overlay) != 1 {
-		t.Fatalf("overlay anchors = %d, want 1", len(snap.Overlay))
-	}
-	if snap.Overlay[0].Source != trust.SourceOverlay {
-		t.Errorf("overlay source = %q", snap.Overlay[0].Source)
-	}
-	// Overlay appears in the diff like any other anchor.
-	var inDiff bool
-	for _, e := range snap.Diff.Entries {
-		if e.Territory == "overlay" && e.Source == trust.SourceOverlay {
-			inDiff = true
-		}
-	}
-	if !inDiff {
-		t.Error("overlay anchor missing from diff")
-	}
-}
-
 // internalYAMLFixture is a self-contained (inline PEM, no certificateFile
 // dependency) single-entry INTERNAL_TRUST_SOURCE file for ingest-level
 // tests. The certificate is a throwaway ECDSA P-256 self-signed test cert
@@ -576,8 +536,4 @@ func TestRefreshPrefersPreviousSnapshotSigners(t *testing.T) {
 	if snap.LOTLPivotSeq != 378 {
 		t.Errorf("pivot seq = %d, want 378", snap.LOTLPivotSeq)
 	}
-}
-
-func pemEncode(der []byte) []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

@@ -69,9 +69,9 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 | `GET /readyz` | none | Readiness — 503 until a valid snapshot is loaded (store restore or first successful cycle), then 200 |
 | `GET /v1/anchors` | `trust:read` | Filtered **PEM bundle** (`application/x-pem-file`). Strong `ETag` = snapshot id; honours `If-None-Match` (returns 304). Exposes `X-Trust-Snapshot` and `X-Trust-Stale` headers |
 | `GET /v1/anchors.json` | `trust:read` | Same filters — base64-DER certificates plus TSP/service metadata, qualifications, fingerprints, and `type` / `useCases` / `tlSequence` where set |
-| `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `overlayCount` / `internalCount` |
+| `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `internalCount` |
 | `POST /v1/pending/{fingerprint}/approve` | `trust:admin` | Approve a held addition (hold activation mode) |
-| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared sources (overlay + internal — applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle |
+| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle |
 
 **Bundle filters** (shared by both `/v1/anchors*` routes, all optional):
 
@@ -117,7 +117,7 @@ flowchart TB
         EXT["extract — CA/QC anchors + qualifications"]
         SNP["snapshot · diff · filter · PEM bundle"]
         BOOT["bootstrap — pinned signer manifest"]
-        INT["internal · overlay — operator-declared anchors"]
+        INT["internal — operator-declared anchors"]
     end
 
     subgraph Store["store/ — versioned snapshots + bootstrap"]
@@ -139,7 +139,7 @@ flowchart TB
     TASK -. kick .-> MGR
 ```
 
-Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, overlay, internal source, bootstrap) · [`ingest/`](ingest) fetcher, pipeline, pivot walk, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission. Design rationale for the trickier parts (XML-DSig profile adaptations, the pivot algorithm) is recorded in [`DECISIONS.md`](DECISIONS.md).
+Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`ingest/`](ingest) fetcher, pipeline, pivot walk, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission. Design rationale for the trickier parts (XML-DSig profile adaptations, the pivot algorithm) is recorded in [`DECISIONS.md`](DECISIONS.md).
 
 ### Ingest → verify → snapshot → serve
 
@@ -172,7 +172,7 @@ sequenceDiagram
         P->>V: verify TL vs signer certs from the verified LOTL pointer
         P->>P: extract CA/QC anchors + qualifications
     end
-    P->>P: merge overlay + internal anchors · apply hold mode · ComputeID · diff
+    P->>P: merge declared (internal) anchors · apply hold mode · ComputeID · diff
     P-->>M: next snapshot
     M->>S: SaveSnapshot (only when content changed)
     M->>M: atomic swap active = next
@@ -213,7 +213,7 @@ Trust posture: an internal anchor carries the **same posture as the pinned boots
 
 ### Hold mode and change governance
 
-`TRUST_ACTIVATION_MODE=hold` moves anchor **additions** into a pending set (visible via `/v1/snapshot`, excluded from bundles) until an operator approves them with `POST /v1/pending/{fingerprint}/approve` or `TRUST_HOLD_AUTO_RELEASE` elapses. **Removals always apply immediately** — a withdrawn or suspended CA must not stay trusted. Overlay and internal anchors are operator-deployed and bypass hold. Every anchor-set change emits a `trust.anchor_change` event; the first ever ingest is treated as the baseline, not a flood of held additions.
+`TRUST_ACTIVATION_MODE=hold` moves anchor **additions** into a pending set (visible via `/v1/snapshot`, excluded from bundles) until an operator approves them with `POST /v1/pending/{fingerprint}/approve` or `TRUST_HOLD_AUTO_RELEASE` elapses. **Removals always apply immediately** — a withdrawn or suspended CA must not stay trusted. Declared (internal) anchors are operator-deployed and bypass hold — deploying the file is the approval, deliberately (the operator who can place the declaration is already trusted to place it; a second in-band approval by the same person would be ceremony, not control). Every anchor-set change emits a `trust.anchor_change` event; the first ever ingest is treated as the baseline, not a flood of held additions.
 
 ---
 
@@ -267,7 +267,7 @@ curl -H "Authorization: Bearer $TOKEN" -H "DPoP: $PROOF" \
 export WEBEID_TRUSTED_CA_CERTS_PATH=/etc/webeid/trust/
 ```
 
-Then poll with `If-None-Match: "<last ETag>"`: a `304` means nothing to do; a `200` means write the new bundle and reload the consumer. On any error, keep the existing file — the consumer applies the same fail-safe the service does upstream, and treats `X-Trust-Stale: true` as a monitoring signal, not an error. Demo/test CAs that never appear in production TLs can be injected at the service via `TRUST_EXTRA_ANCHORS_PATH` and arrive in the same bundle tagged `source: manual-overlay`. Typed EUDI anchors are read back with the `type=` filter, e.g. `?type=pid_provider&territory=LV`.
+Then poll with `If-None-Match: "<last ETag>"`: a `304` means nothing to do; a `200` means write the new bundle and reload the consumer. On any error, keep the existing file — the consumer applies the same fail-safe the service does upstream, and treats `X-Trust-Stale: true` as a monitoring signal, not an error. Demo/test CAs that never appear in production TLs are declared in the `INTERNAL_TRUST_SOURCE` file as entries without a `type:` (or with the explicit `tsl_ca` alias) and arrive in the same untyped bundle tagged `source: internal`. Typed EUDI anchors are read back with the `type=` filter, e.g. `?type=pid_provider&territory=LV`.
 
 ---
 
@@ -285,8 +285,9 @@ Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METR
 | `TRUST_ACTIVATION_MODE` | `auto` | `auto` \| `hold` (additions held for operator approval) |
 | `TRUST_HOLD_AUTO_RELEASE` | `72h` | Hold-mode auto-release window |
 | `TRUST_STALE_GRACE` | `24h` | Grace past `NextUpdate` before data is flagged stale |
-| `TRUST_EXTRA_ANCHORS_PATH` | — | Demo/test manual overlay (PEM file/dir); empty in production. A bad edit carries the previous overlay set over (`trust.overlay_source_error`) — it never stalls ingestion |
-| `INTERNAL_TRUST_SOURCE` | — | Operator-declared EUDI anchor file (YAML). Parsed fail-closed at whole-file granularity; a bad edit carries the previous set over. Bypasses hold mode like the overlay |
+| `TRUST_SERVICE_TYPES` | `CA/QC` | Accepted trusted-list service types (comma-separated registered Svctype URIs or shorthand suffixes). Services of other types are counted and reported, never silently dropped. Each accepted type must have a serving route (a bundle the anchors can be requested through) or boot fails. National-level types are matched against the national status vocabulary (`recognisedatnationallevel` for `granted`, `deprecatedatnationallevel` for `withdrawn`) — the qualified and national planes never share status values |
+| `INTERNAL_TRUST_SOURCE` | — | The operator declaration file (YAML): typed EUDI actor anchors AND untyped card/QC CA declarations (no `type:`, or the `tsl_ca` alias). Parsed fail-closed at whole-file granularity; a bad edit carries the previous set over (`trust.internal_source_error`). Bypasses hold mode — deploying the file is the approval |
+| `TRUST_EXTRA_ANCHORS_PATH` | **retired** | The manual overlay is gone. A deployment still setting this fails boot with a migration pointer — refusing to start beats silently not serving anchors the operator expects. Declare the same certificates in `INTERNAL_TRUST_SOURCE` instead |
 | `TRUST_SNAPSHOT_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_PREFIX` / `_USE_SSL` | — / — / — / — / — / `true` | S3-API snapshot store (platform standard); `_ENDPOINT` is required when a bucket is set |
 | `TRUST_SNAPSHOT_DIR` | — | Filesystem snapshot store (development) |
 | `TRUST_STORE_DSN` | — | PostgreSQL backend DSN — reached via `SECURITY DEFINER` procedures as the `EXECUTE`-only `trust_anchor_public` role. **Takes precedence** over S3/FS/memory. Secret: supports the `TRUST_STORE_DSN_FILE` convention (a mounted file; an explicit plain value still overrides it) |
@@ -314,8 +315,8 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 |---|---|---|
 | `trust_snapshot_age_seconds` | gauge (computed at scrape) | Age of the served snapshot. `-1` means nothing is served yet |
 | `trust_sync_last_success_timestamp_seconds` | gauge | Unix time of the last successful refresh cycle. `0` until the first success — `time() - value` alerting catches both "never" and "stopped" |
-| `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `manual-overlay` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
-| `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of that operator-declared source (`overlay` / `internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
+| `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
+| `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of the operator-declared source (`internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
 
 ### Security events
 
@@ -326,7 +327,6 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 | `trust.refresh_failure` | warning | A cycle (or a persistence step) failed; the last good snapshot is still served |
 | `trust.stale` | warning | Served data is past `NextUpdate` + grace |
 | `trust.internal_source_error` | warning | `INTERNAL_TRUST_SOURCE` failed to load/validate; the previous internal set is carried over |
-| `trust.overlay_source_error` | warning | `TRUST_EXTRA_ANCHORS_PATH` failed to load; the previous overlay set is carried over |
 | `egress.violation` | high | A TL pointer was non-https or outside the allow-list; the territory keeps serving last good data |
 | `authz.denied` | warning | A `/v1` request lacked the required `trust:<level>` scope |
 
@@ -334,7 +334,7 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 
 One structured `trust inventory` line is written at startup and on any change to the declared
 set, under the rule **declared trust is named, derived trust is counted**: every operator-declared
-anchor (internal source and overlay) is listed in full — `name`, `type`, `territory`, `status`,
+anchor is listed in full — `name`, `type`, `territory`, `status`,
 `sha256`, `validUntil` — because a declaration exists in one file on one disk and the log is its
 only other record; trusted-list anchors appear as per-territory and per-type counts, because each
 one is in a published, signed, re-fetchable list. Subjects and fingerprints are non-sensitive
@@ -343,7 +343,7 @@ provenance; certificate material never appears.
 Each declared source carries a state field that keeps three outcomes apart which look identical
 from outside:
 
-| `internal_state` / `overlay_state` | Meaning |
+| `internal_state` | Meaning |
 |---|---|
 | `not_configured` | The source path is unset — the feature is off |
 | `ok` | The file loaded; `*_count` says how many anchors it declared (0 is a valid answer) |
@@ -363,7 +363,7 @@ Alert on these — each one means trust decisions are being made on data you wou
 |---|---|---|
 | `trust.stale` | Anchors are being served past the publisher's own `NextUpdate` plus grace. The data is not wrong yet; it is no longer vouched for. | Check upstream reachability and the last successful refresh. A stale that persists past one refresh interval is an outage of the source, not a blip. |
 | `egress.violation` | A trusted-list pointer was non-HTTPS or outside the configured allow-list. Either the upstream list changed shape, or something is redirecting it. | Treat as potentially hostile until explained. The affected territory keeps serving its last good data, so there is time to look. |
-| `trust.internal_source_error` / `trust.overlay_source_error` | An operator-declared source (the internal file / the extra-anchors overlay) failed to load or validate, and **the previous set is being served instead**. The edit that was just deployed is not live. | Read the diagnostic, which names the offending entry (internal) or file (overlay). Until it is fixed, what is served is the state before the edit — which looks identical to a successful edit from the outside. |
+| `trust.internal_source_error` | The operator declaration file failed to load or validate, and **the previous set is being served instead**. The edit that was just deployed is not live. | Read the diagnostic, which names the offending entry. Until it is fixed, what is served is the state before the edit — which looks identical to a successful edit from the outside. |
 | `trust.refresh_failure` | A cycle failed; the last good snapshot is still served. | One is normal on a flaky network. A run of them means refreshes have silently stopped and staleness is next. |
 
 Review, do not alert:
@@ -418,7 +418,6 @@ trust-anchor/
 │   ├── filter.go                — bundle filtering + PEM assembly
 │   ├── diff.go                  — anchor-set diff between snapshots
 │   ├── bootstrap.go             — pinned signer manifest / PEM loading
-│   ├── overlay.go               — manual demo/test overlay
 │   └── internal.go              — operator-declared EUDI anchors (fail-closed)
 ├── store/                       — s3 / fs / memory / postgres snapshot stores
 ├── tasks/refresh.go             — refresh loop (interval · NextUpdate · admin kick)
@@ -505,9 +504,8 @@ not omissions — recorded here so they are not rediscovered as defects.
 
 ## Known limitations
 
-- **`source/` is a scaffold.** The multi-source adapter contract (wallet-provider lists, QTSP lists, certified-wallet lists, RP registries) is defined but not yet wired into the pipeline; today's ingestion is the LOTL + national-TL + overlay + internal-source path described above. Migrating the existing ingestion onto the adapters is a trust-critical refactor whose acceptance bar is byte-identical output.
+- **`source/` is a scaffold.** The multi-source adapter contract (wallet-provider lists, QTSP lists, certified-wallet lists, RP registries) is defined but not yet wired into the pipeline; today's ingestion is the LOTL + national-TL + internal-source path described above. Migrating the existing ingestion onto the adapters is a trust-critical refactor whose acceptance bar is byte-identical output.
 - **EUDI actor trust is operator-declared, not upstream.** Until the EU publishes machine-readable trust lists for the new EUDI actor types, typed anchors come only from `INTERNAL_TRUST_SOURCE` — a direct-trust file, not an XML-DSig-verified list.
-- **No file-watcher.** The internal trust source and the overlay are re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.
-- **`qscdOnly` fidelity depends on the upstream list — and the flag currently maps `QCWithQSCD` only.** Services qualified `QCQSCDManagedOnBehalf` (a QSCD managed on the subscriber's behalf — the remote/cloud-signing certification, which `[ETSI TS 119 615 V1.4.1 §4.5.4]` Table 7 counts as QSCD-positive alongside `QCWithQSCD`) are served with `qcWithQscd: false` today; a `qscd=true` bundle excludes them. Known defect, fix pending. Some national lists also carry the qualifier only on historical entries.
-- **Duplicate-certificate service entries are merged, first entry wins.** When one certificate appears under several service entries, only the first (in deterministic sort order) contributes `uses`/`qualifiers`; `[ETSI TS 119 615 V1.4.1 §4.3.4]` instead classifies such duplication and treats conflicting statuses as an error. No configured territory's list currently contains duplicate-certificate entries; known limitation until the extractor's type-widening rework.
+- **No file-watcher.** The internal trust source is re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.
+- **`qscdOnly` fidelity depends on the upstream list.** The flag maps both QSCD-positive qualifiers (`QCWithQSCD` and `QCQSCDManagedOnBehalf` — the remote/cloud-signing shape, per `[ETSI TS 119 615 V1.4.1 §4.5.4]` Table 7); it remains an anchor-level approximation of a per-certificate determination (see the conformance position above), and some national lists carry the qualifiers only on historical entries.
 - **Single object-store / single DB endpoint.** The S3, filesystem and Postgres backends each target one endpoint; there is no built-in multi-region replication beyond what the chosen backend provides.

@@ -12,7 +12,7 @@ const (
 // DiffEntry is one anchor-set change between two snapshots.
 type DiffEntry struct {
 	Kind        string `json:"kind"`
-	Territory   string `json:"territory"` // "overlay" for overlay anchors
+	Territory   string `json:"territory"` // "internal" for declared anchors
 	Fingerprint string `json:"fingerprint"`
 	TSPName     string `json:"tspName"`
 	ServiceName string `json:"serviceName"`
@@ -32,7 +32,7 @@ type Diff struct {
 func (d *Diff) Empty() bool { return d == nil || len(d.Entries) == 0 }
 
 // ComputeDiff diffs the served anchor sets of two snapshots (territories +
-// overlay + internal) by certificate fingerprint. prev may be nil (first
+// internal) by certificate fingerprint. prev may be nil (first
 // snapshot — everything is an addition).
 func ComputeDiff(prev, next *Snapshot) *Diff {
 	d := &Diff{}
@@ -86,9 +86,6 @@ func anchorIndex(s *Snapshot) map[string]indexedAnchor {
 		for _, a := range t.Anchors {
 			out[t.Code+"/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: t.Code}
 		}
-	}
-	for _, a := range s.Overlay {
-		out["overlay/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: "overlay"}
 	}
 	for _, a := range s.Internal {
 		out["internal/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: "internal"}

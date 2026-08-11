@@ -1,8 +1,10 @@
 package trust
 
 import (
+	"encoding/base64"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,7 +33,7 @@ const (
 
 func TestExtractAnchorsLV(t *testing.T) {
 	tl := parseFixture(t, "lv-tsl.xml")
-	anchors, _, err := ExtractAnchors(tl, "LV", []string{"granted"}, time.Now())
+	anchors, _, err := ExtractAnchors(tl, "LV", []string{"granted"}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +93,7 @@ func TestExtractAnchorsLV(t *testing.T) {
 // recorded fixture.
 func TestQualificationMappingQSCD(t *testing.T) {
 	tl := parseFixture(t, "lv-tsl.xml")
-	anchors, _, err := ExtractAnchors(tl, "LV", []string{"granted", "withdrawn"}, time.Now())
+	anchors, _, err := ExtractAnchors(tl, "LV", []string{"granted", "withdrawn"}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +119,7 @@ func TestQualificationMappingQSCD(t *testing.T) {
 
 func TestExtractAnchorsEE(t *testing.T) {
 	tl := parseFixture(t, "ee-tsl.xml")
-	anchors, _, err := ExtractAnchors(tl, "EE", []string{"granted"}, time.Now())
+	anchors, _, err := ExtractAnchors(tl, "EE", []string{"granted"}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +131,7 @@ func TestExtractAnchorsEE(t *testing.T) {
 func TestExtractAnchorsStatusFilter(t *testing.T) {
 	tl := parseFixture(t, "lv-tsl.xml")
 	// Accepting an unused status returns nothing.
-	anchors, _, err := ExtractAnchors(tl, "LV", []string{"accredited"}, time.Now())
+	anchors, _, err := ExtractAnchors(tl, "LV", []string{"accredited"}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +140,7 @@ func TestExtractAnchorsStatusFilter(t *testing.T) {
 	}
 
 	// Accepting withdrawn as well yields more than granted alone.
-	more, _, err := ExtractAnchors(tl, "LV", []string{"granted", "withdrawn"}, time.Now())
+	more, _, err := ExtractAnchors(tl, "LV", []string{"granted", "withdrawn"}, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,5 +179,192 @@ func TestNormalizeStatus(t *testing.T) {
 	full := "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/withdrawn"
 	if got := NormalizeStatus(full); got != full {
 		t.Errorf("NormalizeStatus(full URI) = %q", got)
+	}
+}
+
+// The extractor admits a configured service-type set, not a hard-coded
+// constant: with TSA/QTST admitted alongside CA/QC, the EE fixture's granted
+// timestamp services are extracted; without it they are reported as skipped
+// rather than silently dropped.
+func TestExtractorAdmitsConfiguredStiSet(t *testing.T) {
+	tl := parseFixture(t, "ee-tsl.xml")
+
+	both, _, err := ExtractAnchors(tl, "EE",
+		[]string{"granted"},
+		[]string{"http://uri.etsi.org/TrstSvc/Svctype/CA/QC", "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST"},
+		time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsa := 0
+	for _, a := range both {
+		if a.ServiceType == "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST" {
+			tsa++
+			if a.Type != "" {
+				t.Fatalf("TL-sourced anchor carries an EUDI type %q", a.Type)
+			}
+		}
+	}
+	if tsa == 0 {
+		t.Fatal("no TSA/QTST anchors extracted with the type admitted")
+	}
+
+	// Default (CA/QC only): the same services are skipped LOUDLY — one
+	// aggregated warning per unaccepted type present in the list.
+	_, warnings, err := ExtractAnchors(tl, "EE",
+		[]string{"granted"},
+		[]string{"http://uri.etsi.org/TrstSvc/Svctype/CA/QC"},
+		time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "TSA/QTST") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("skipped TSA/QTST services not reported: %+v", warnings)
+	}
+}
+
+// Status vocabularies follow the service-type plane: a national-level type
+// carries recognised/deprecatedatnationallevel, never granted/withdrawn —
+// admitting the type must admit the MATCHING statuses, or the widening
+// re-creates the silent drop one layer down. The EE fixture's
+// Certstatus/OCSP services are deprecatedatnationallevel: they surface when
+// withdrawn is accepted (its national equivalent), and not on granted alone.
+func TestNationalLevelStatusEquivalence(t *testing.T) {
+	tl := parseFixture(t, "ee-tsl.xml")
+	const ocsp = "http://uri.etsi.org/TrstSvc/Svctype/Certstatus/OCSP"
+
+	got, _, err := ExtractAnchors(tl, "EE", []string{"granted", "withdrawn"}, []string{ocsp}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, a := range got {
+		if a.ServiceType == ocsp {
+			n++
+			if !strings.Contains(a.Status, "deprecatedatnationallevel") {
+				t.Fatalf("unexpected status %q", a.Status)
+			}
+		}
+	}
+	if n == 0 {
+		t.Fatal("national-level services not admitted via the status equivalence")
+	}
+
+	got, _, err = ExtractAnchors(tl, "EE", []string{"granted"}, []string{ocsp}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range got {
+		if a.ServiceType == ocsp {
+			t.Fatal("deprecated national-level service admitted on granted alone")
+		}
+	}
+}
+
+// The QSCD flag follows the standard's determination table, not one
+// qualifier: QCQSCDManagedOnBehalf (a QSCD managed on the subscriber's
+// behalf — remote/cloud signing) is QSCD-positive exactly like QCWithQSCD.
+// The captured EE list carries granted services with ManagedOnBehalf and
+// WITHOUT QCWithQSCD (SK's remote-signing certification), so this is pinned
+// against real data, not a synthetic fixture.
+func TestQSCDFlagCountsManagedOnBehalf(t *testing.T) {
+	tl := parseFixture(t, "ee-tsl.xml")
+	anchors, _, err := ExtractAnchors(tl, "EE", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var managed int
+	for _, a := range anchors {
+		hasManaged := false
+		for _, q := range a.Qualifiers {
+			if q == "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/QCQSCDManagedOnBehalf" {
+				hasManaged = true
+			}
+		}
+		if hasManaged {
+			managed++
+			if !a.QCWithQSCD {
+				t.Errorf("anchor %s: QCQSCDManagedOnBehalf present but QSCD flag false", a.FingerprintSHA256)
+			}
+		}
+	}
+	if managed == 0 {
+		t.Fatal("no ManagedOnBehalf-qualified granted anchors in the EE fixture — the fixture premise broke")
+	}
+}
+
+// dupCertTL builds a synthetic trusted list with one certificate under two
+// service entries — the duplication shape the standard classifies instead of
+// silently collapsing.
+func dupCertTL(t *testing.T, statusA, statusB, asiA, asiB string) *tsl.TrustedList {
+	t.Helper()
+	cert := testCert(t, "Shared CA")
+	der := base64.StdEncoding.EncodeToString(cert.Raw)
+	mk := func(name, status, asi string) tsl.Service {
+		info := tsl.ServiceInformation{
+			TypeIdentifier: tsl.ServiceTypeCAQC,
+			Name:           tsl.LocalizedText{Names: []tsl.LocalizedName{{Lang: "en", Value: name}}},
+			Status:         NormalizeStatus(status),
+			DigitalIdentity: tsl.ServiceDigitalIdentity{DigitalIDs: []tsl.DigitalID{
+				{X509Certificate: der},
+			}},
+		}
+		if asi != "" {
+			info.Extensions = []tsl.Extension{{AdditionalServiceInformation: &tsl.ASI{URI: asi}}}
+		}
+		return tsl.Service{Information: info}
+	}
+	return &tsl.TrustedList{ProviderList: &tsl.ProviderList{Providers: []tsl.Provider{{
+		Information: tsl.ProviderInformation{Name: tsl.LocalizedText{Names: []tsl.LocalizedName{{Lang: "en", Value: "TSP"}}}},
+		Services:    []tsl.Service{mk("svc-a", statusA, asiA), mk("svc-b", statusB, asiB)},
+	}}}}
+}
+
+// One certificate under two entries with AGREEING statuses merges — the
+// second entry's uses/qualifiers are unioned, never silently dropped
+// (previously first-entry-won and a use=seal bundle missed the CA).
+func TestDuplicateCertEntriesMergeUses(t *testing.T) {
+	tl := dupCertTL(t, "granted", "granted",
+		"http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSignatures",
+		"http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForeSeals")
+	anchors, _, err := ExtractAnchors(tl, "LV", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchors) != 1 {
+		t.Fatalf("anchors = %d, want 1 (one certificate)", len(anchors))
+	}
+	a := anchors[0]
+	if !a.MatchesUse(UseSignature) || !a.MatchesUse(UseSeal) {
+		t.Fatalf("merged anchor uses = %v, want signature AND seal", a.Uses)
+	}
+}
+
+// One certificate under two entries with CONFLICTING statuses is the
+// standard's duplication ERROR: the anchor is dropped (fail closed) and the
+// conflict is reported — never served on the friendlier status.
+func TestDuplicateCertStatusConflictFailsClosed(t *testing.T) {
+	tl := dupCertTL(t, "granted", "withdrawn", "", "")
+	anchors, warnings, err := ExtractAnchors(tl, "LV", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchors) != 0 {
+		t.Fatalf("anchors = %d, want 0 (status conflict fails closed)", len(anchors))
+	}
+	found := false
+	for _, w := range warnings {
+		if strings.Contains(w.Reason, "conflicting statuses") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("status conflict not reported: %+v", warnings)
 	}
 }

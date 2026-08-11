@@ -28,9 +28,12 @@ type Config struct {
 	LOTLURL          string
 	Territories      []string
 	AcceptedStatuses []string
-	ActivationMode   string
-	HoldAutoRelease  time.Duration
-	ExtraAnchorsPath string
+	// AcceptedServiceTypes is the set of trusted-list service-type
+	// identifiers the extractor admits (registered Svctype URIs; empty means
+	// CA/QC only). Services of other types are counted and reported.
+	AcceptedServiceTypes []string
+	ActivationMode       string
+	HoldAutoRelease      time.Duration
 	// InternalTrustSource is the optional operator-declared anchor file
 	// (INTERNAL_TRUST_SOURCE, trust.LoadInternal). Empty means none configured.
 	InternalTrustSource string
@@ -119,26 +122,20 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 	return next, nil
 }
 
-// applyDeclaredSources loads the two operator-declared anchor sources — the
-// manual overlay and the internal trust source — into next. A failed load
-// never fails the cycle: the previous set is carried over (the same
-// fail-safe the territories have) and the source's security event is
-// emitted, because a typo in an operator file must not take down
-// trusted-list ingestion. One shared path for both sources, so their
-// failure postures cannot drift apart. The returned report (also attached
-// to next) keeps the load outcomes distinguishable for the inventory log —
-// a carry-over produces the same anchor set as an unchanged file, and only
-// the report can tell them apart.
+// applyDeclaredSources loads the operator-declared anchor source — the
+// internal trust source — into next. A failed load never fails the cycle:
+// the previous set is carried over (the same fail-safe the territories
+// have) and the source's security event is emitted, because a typo in an
+// operator file must not take down trusted-list ingestion. The returned
+// report (also attached to next) keeps the load outcomes distinguishable
+// for the inventory log — a carry-over produces the same anchor set as an
+// unchanged file, and only the report can tell them apart.
 func (p *Pipeline) applyDeclaredSources(prev, next *trust.Snapshot, now time.Time) trust.DeclaredReport {
-	var prevOverlay, prevInternal []trust.Anchor
+	var prevInternal []trust.Anchor
 	if prev != nil {
-		prevOverlay, prevInternal = prev.Overlay, prev.Internal
+		prevInternal = prev.Internal
 	}
 	var rep trust.DeclaredReport
-	next.Overlay, rep.Overlay = p.declaredSet("extra anchors overlay", declaredSourceOverlay,
-		p.cfg.ExtraAnchorsPath != "", prevOverlay,
-		func() ([]trust.Anchor, error) { return trust.LoadOverlay(p.cfg.ExtraAnchorsPath) },
-		func(err error) { p.events.OverlaySourceError(nil, err) })
 	next.Internal, rep.Internal = p.declaredSet("internal trust source", declaredSourceInternal,
 		p.cfg.InternalTrustSource != "", prevInternal,
 		func() ([]trust.Anchor, error) { return trust.LoadInternal(p.cfg.InternalTrustSource, now) },
@@ -352,7 +349,7 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		}
 	}
 
-	anchors, warnings, err := trust.ExtractAnchors(tl, code, p.cfg.AcceptedStatuses, now)
+	anchors, warnings, err := trust.ExtractAnchors(tl, code, p.cfg.AcceptedStatuses, p.cfg.AcceptedServiceTypes, now)
 	if err != nil {
 		return nil, err
 	}

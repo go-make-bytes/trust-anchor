@@ -15,8 +15,7 @@ import (
 
 // Anchor sources.
 const (
-	SourceTL      = "tl"
-	SourceOverlay = "manual-overlay"
+	SourceTL = "tl"
 	// SourceInternal tags operator-declared anchors from INTERNAL_TRUST_SOURCE.
 	SourceInternal = "internal"
 )
@@ -46,8 +45,9 @@ const (
 	UseWebsite        = "website"
 )
 
-// Anchor is one trusted CA certificate extracted from a trusted list (or the
-// manual overlay) together with the metadata consumers filter on.
+// Anchor is one trusted CA certificate extracted from a trusted list (or
+// declared in the internal trust source) together with the metadata
+// consumers filter on.
 type Anchor struct {
 	Territory          string    `json:"territory"`
 	Source             string    `json:"source"`
@@ -77,7 +77,7 @@ type Anchor struct {
 	// UseCases lists EAA use-case accreditation (consumer extension E2/GAP-04).
 	UseCases []string `json:"useCases,omitempty"`
 	// TLSequence is the sequence of the TL this anchor came from (0 = not
-	// TL-sourced: overlay/internal). Additive consumer field (wire tlSequence).
+	// TL-sourced: internal). Additive consumer field (wire tlSequence).
 	TLSequence int64 `json:"tlSequence,omitempty"`
 }
 
@@ -199,18 +199,17 @@ type Snapshot struct {
 	BootstrapVersion int    `json:"bootstrapVersion,omitempty"`
 
 	Territories []*Territory `json:"territories"`
-	Overlay     []Anchor     `json:"overlay,omitempty"`
 	// Internal holds the operator-declared anchors from INTERNAL_TRUST_SOURCE
-	// (trust.LoadInternal). Like Overlay, these carry no upstream TL/XMLDSig
-	// chain and bypass hold mode — deploying the file IS the approval.
+	// (trust.LoadInternal). They carry no upstream TL/XMLDSig chain and
+	// bypass hold mode — deploying the file IS the approval.
 	Internal []Anchor `json:"internal,omitempty"`
 
 	Pending []PendingAnchor `json:"pending,omitempty"`
 
 	Diff *Diff `json:"diff,omitempty"`
 
-	// DeclaredLoad reports the outcome of the declared-source loads of the
-	// cycle that built this snapshot (overlay + internal). Runtime-only
+	// DeclaredLoad reports the outcome of the declared-source load of the
+	// cycle that built this snapshot. Runtime-only
 	// diagnostics for the trust-inventory log: never serialized, never part
 	// of the content id — a load outcome describes one process's attempt,
 	// not the trust content itself.
@@ -266,10 +265,11 @@ func (s *Snapshot) EarliestNextUpdate() time.Time {
 type idContent struct {
 	LOTLSequence uint64        `json:"lotlSequence"`
 	Territories  []idTerritory `json:"territories"`
-	Overlay      []idAnchor    `json:"overlay,omitempty"`
-	// Internal projects Snapshot.Internal exactly like Overlay: additive,
-	// omitempty — a snapshot with no internal anchors serializes
-	// byte-identically to before this field existed (golden-ID stability).
+	// Internal is additive, omitempty — a snapshot with no internal anchors
+	// serializes byte-identically to before this field existed (golden-ID
+	// stability). The retired overlay slot keeps its wire position vacated:
+	// a no-overlay snapshot always serialized without it, so removing the
+	// field leaves every overlay-free ID unchanged.
 	Internal []idAnchor `json:"internal,omitempty"`
 	Pending  []string   `json:"pending,omitempty"`
 }
@@ -309,10 +309,6 @@ func (s *Snapshot) ComputeID() string {
 		content.Territories = append(content.Territories, it)
 	}
 	sort.Slice(content.Territories, func(i, j int) bool { return content.Territories[i].Code < content.Territories[j].Code })
-	for _, a := range s.Overlay {
-		content.Overlay = append(content.Overlay, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
-	}
-	sort.Slice(content.Overlay, func(i, j int) bool { return content.Overlay[i].Fingerprint < content.Overlay[j].Fingerprint })
 	for _, a := range s.Internal {
 		content.Internal = append(content.Internal, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
 	}

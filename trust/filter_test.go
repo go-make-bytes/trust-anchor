@@ -67,9 +67,11 @@ func testSnapshot(t *testing.T) *Snapshot {
 				testAnchor(t, "LV", "lv-any", nil, false),
 			}},
 		},
-		Overlay: []Anchor{func() Anchor {
-			a := testAnchor(t, "", "demo-overlay", nil, false)
-			a.Source = SourceOverlay
+		// An untyped declared anchor: merges into every untyped bundle like
+		// the TL anchors (the A2 declaration path — the overlay's successor).
+		Internal: []Anchor{func() Anchor {
+			a := testAnchor(t, "", "demo-declared", nil, false)
+			a.Source = SourceInternal
 			return a
 		}()},
 	}
@@ -84,7 +86,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 5 { // 4 TL anchors + overlay
+	if len(all) != 5 { // 4 TL anchors + the untyped declared anchor
 		t.Fatalf("unfiltered: got %d anchors, want 5", len(all))
 	}
 
@@ -92,7 +94,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(lv) != 4 { // 3 LV + overlay (overlay merges into every bundle)
+	if len(lv) != 4 { // 3 LV + declared (a declared anchor merges into every untyped bundle)
 		t.Fatalf("LV: got %d anchors, want 4", len(lv))
 	}
 
@@ -100,7 +102,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// lv-sig (signature), lv-any (no Fore* → all uses), overlay (no uses).
+	// lv-sig (signature), lv-any (no Fore* → all uses), declared (no uses).
 	if len(sig) != 3 {
 		t.Fatalf("LV signature: got %d anchors, want 3", len(sig))
 	}
@@ -134,7 +136,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 
 // TestFilterIncludesInternal proves the merge point AND the type= exclusion
 // rule together: s.Internal is merged
-// through the same matches() gate as Overlay, but a TYPED internal anchor
+// through the same matches() gate, but a TYPED internal anchor
 // (Type: "pid_provider" here) is now excluded from the untyped (legacy)
 // bundle and served ONLY by its own type= query — closing the mid-plan leak
 // that this test used to pin (T2: a typed internal anchor was
@@ -244,18 +246,22 @@ func goldenSnapshot() *Snapshot {
 				{Source: SourceTL, FingerprintSHA256: "4444444444444444444444444444444444444444444444444444444444444d", Status: NormalizeStatus("granted"), QCWithQSCD: false},
 			}},
 		},
-		Overlay: []Anchor{
-			{Source: SourceOverlay, FingerprintSHA256: "5555555555555555555555555555555555555555555555555555555555555e", Status: NormalizeStatus("granted"), QCWithQSCD: false},
+		// An untyped declared (internal) anchor — the successor of the retired
+		// overlay slot in this fixture.
+		Internal: []Anchor{
+			{Source: SourceInternal, FingerprintSHA256: "5555555555555555555555555555555555555555555555555555555555555e", Status: NormalizeStatus("granted"), QCWithQSCD: false},
 		},
 	}
 }
 
-// goldenSnapshotID is the ComputeID() of goldenSnapshot() captured from a run
-// BEFORE T1 (Anchor/idAnchor had no Type/UseCases/TLSequence). It must not
-// change: the new idAnchor fields are `,omitempty` and this fixture's
-// anchors carry no Type/UseCases, so the serialized idContent — and hence
-// the ID/ETag — must stay byte-identical across the upgrade.
-const goldenSnapshotID = "2944f1799ba7fac3fe6733f9b725bff1b038c4ed448d22fb02d4908bf7d05521"
+// goldenSnapshotID is the ComputeID() of goldenSnapshot() — verified
+// byte-identical between the pre-overlay-retirement code (which serialized
+// an absent overlay to nothing: `omitempty`) and the current code, so the
+// ID/ETag of every overlay-free snapshot survives the upgrade. The idAnchor
+// fields added since (Type/UseCases) are `,omitempty` and this fixture's
+// anchors carry none, preserving the same stability across the earlier
+// type-model change.
+const goldenSnapshotID = "3ac3472efe8ba08120a6c7b42d097caefcbc867bef37913624a5355fe3308bed"
 
 // TestComputeIDStableWithoutTypedFields: a snapshot whose anchors carry no
 // Type/UseCases must produce the SAME ID as before this change (ETag
@@ -348,8 +354,8 @@ func TestComputeDiff(t *testing.T) {
 	}
 }
 
-// TestComputeDiffIncludesInternal proves ComputeDiff diffs s.Internal like
-// s.Overlay (internal anchors must
+// TestComputeDiffIncludesInternal proves ComputeDiff diffs s.Internal
+// (internal anchors must
 // be included in ComputeID, ComputeDiff, and trust.anchor_change events).
 // prev/next differ by exactly one internal anchor; the diff must report it
 // as added (forward) / removed (reverse).
