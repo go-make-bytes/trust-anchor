@@ -36,7 +36,7 @@ func (r *router) approvePending(ctx *azugo.Context) {
 //
 // @operationId TriggerRefresh
 // @title Trigger refresh cycle
-// @description Runs an immediate LOTL/TL ingestion cycle.
+// @description Re-reads the operator-declared sources (applied even when the upstream is unreachable), then runs an immediate LOTL/TL ingestion cycle.
 // @success 200 RefreshResponse response.Refresh "Cycle result"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"

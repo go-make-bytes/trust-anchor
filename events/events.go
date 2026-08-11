@@ -28,6 +28,12 @@ const (
 	// load or validate — the previous internal anchor set is carried over
 	// (fail-safe), same posture as EventRefreshFailure for territories.
 	EventInternalSourceError = "trust.internal_source_error"
+	// EventOverlaySourceError fires when the extra-anchors overlay
+	// (TRUST_EXTRA_ANCHORS_PATH) fails to load — the previous overlay set is
+	// carried over (fail-safe), the same posture as EventInternalSourceError:
+	// a typo in an operator-declared file must never stall trusted-list
+	// ingestion.
+	EventOverlaySourceError = "trust.overlay_source_error"
 )
 
 // Emitter emits security events with or without a request context.
@@ -136,6 +142,15 @@ func (e *Emitter) RefreshFailure(ctx *azugo.Context, stage, reason string) {
 // being served. err.Error() only — never file contents or key material.
 func (e *Emitter) InternalSourceError(ctx *azugo.Context, err error) {
 	e.Emit(ctx, EventInternalSourceError, secevents.SeverityWarning, broker.OutcomeFailure, map[string]any{
+		"error": err.Error(),
+	})
+}
+
+// OverlaySourceError emits the fail-safe warning: the extra-anchors overlay
+// failed to load and the previous overlay set is still being served.
+// err.Error() only — never file contents or key material.
+func (e *Emitter) OverlaySourceError(ctx *azugo.Context, err error) {
+	e.Emit(ctx, EventOverlaySourceError, secevents.SeverityWarning, broker.OutcomeFailure, map[string]any{
 		"error": err.Error(),
 	})
 }

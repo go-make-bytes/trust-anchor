@@ -17,6 +17,9 @@ import (
 type fakeRefresher struct {
 	snap *trust.Snapshot
 	err  error
+	// declared, when set, is what RefreshDeclared reports as the changed
+	// declared-source rebuild; nil means "declared sources unchanged".
+	declared *trust.Snapshot
 }
 
 func (f *fakeRefresher) Refresh(_ context.Context, prev *trust.Snapshot, _ *trust.Bootstrap) (*trust.Snapshot, error) {
@@ -29,6 +32,18 @@ func (f *fakeRefresher) Refresh(_ context.Context, prev *trust.Snapshot, _ *trus
 	}
 	snap.Diff = trust.ComputeDiff(prev, snap)
 	return snap, nil
+}
+
+func (f *fakeRefresher) RefreshDeclared(prev *trust.Snapshot, _ time.Time) (*trust.Snapshot, bool, error) {
+	if f.declared == nil {
+		return nil, false, nil
+	}
+	next := f.declared
+	if prev != nil {
+		next.PrevID = prev.ID
+	}
+	next.Diff = trust.ComputeDiff(prev, next)
+	return next, true, nil
 }
 
 func managerForTest(t *testing.T, r Refresher) (*Manager, *store.Memory) {

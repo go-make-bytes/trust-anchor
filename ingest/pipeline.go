@@ -106,27 +106,7 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 		next.Territories = append(next.Territories, t)
 	}
 
-	// Manual demo/test overlay (operator-controlled, pre-approved).
-	overlay, err := trust.LoadOverlay(p.cfg.ExtraAnchorsPath)
-	if err != nil {
-		return nil, fmt.Errorf("ingest: load extra anchors overlay: %w", err)
-	}
-	next.Overlay = overlay
-
-	// Operator-declared internal anchors (INTERNAL_TRUST_SOURCE). Unlike the
-	// overlay/territories, a bad edit here never fails the whole cycle: the
-	// previous internal set is carried over (TA-D10 posture) and an event is
-	// emitted — an operator typo in this file must not take down ingestion.
-	internalAnchors, err := trust.LoadInternal(p.cfg.InternalTrustSource, now)
-	if err != nil {
-		p.events.InternalSourceError(nil, err)
-		p.log.Warn("internal trust source failed to load — carrying over last good set", zap.Error(err))
-		if prev != nil {
-			next.Internal = prev.Internal
-		}
-	} else {
-		next.Internal = internalAnchors
-	}
+	p.applyDeclaredSources(prev, next, now)
 
 	p.applyHoldMode(prev, next, now)
 
@@ -137,6 +117,62 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 	next.Diff = trust.ComputeDiff(prev, next)
 
 	return next, nil
+}
+
+// applyDeclaredSources loads the two operator-declared anchor sources — the
+// manual overlay and the internal trust source — into next. A failed load
+// never fails the cycle: the previous set is carried over (the same
+// fail-safe the territories have) and the source's security event is
+// emitted, because a typo in an operator file must not take down
+// trusted-list ingestion. One shared path for both sources, so their
+// failure postures cannot drift apart.
+func (p *Pipeline) applyDeclaredSources(prev, next *trust.Snapshot, now time.Time) {
+	var prevOverlay, prevInternal []trust.Anchor
+	if prev != nil {
+		prevOverlay, prevInternal = prev.Overlay, prev.Internal
+	}
+	next.Overlay = p.declaredSet("extra anchors overlay", prevOverlay,
+		func() ([]trust.Anchor, error) { return trust.LoadOverlay(p.cfg.ExtraAnchorsPath) },
+		func(err error) { p.events.OverlaySourceError(nil, err) })
+	next.Internal = p.declaredSet("internal trust source", prevInternal,
+		func() ([]trust.Anchor, error) { return trust.LoadInternal(p.cfg.InternalTrustSource, now) },
+		func(err error) { p.events.InternalSourceError(nil, err) })
+}
+
+// declaredSet loads one operator-declared anchor set; on failure it returns
+// the previous set unchanged (carry-over) after emitting the source's event.
+func (p *Pipeline) declaredSet(name string, prevSet []trust.Anchor, load func() ([]trust.Anchor, error), emit func(error)) []trust.Anchor {
+	set, err := load()
+	if err != nil {
+		emit(err)
+		p.log.Warn(name+" failed to load — carrying over last good set", zap.Error(err))
+		return prevSet
+	}
+	return set
+}
+
+// RefreshDeclared rebuilds prev with freshly loaded operator-declared
+// sources and no upstream fetch — the boot / on-demand reconcile, so an
+// edited declaration takes effect even while the trusted-list upstream is
+// unreachable. Returns (nil, false, nil) when the declared sets are
+// unchanged. prev must not be nil: with nothing to build on, first
+// activation belongs to a full cycle.
+func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, error) {
+	if prev == nil {
+		return nil, false, errors.New("ingest: declared-source reconcile requires a previous snapshot")
+	}
+	next, err := cloneSnapshot(prev)
+	if err != nil {
+		return nil, false, err
+	}
+	p.applyDeclaredSources(prev, next, now)
+	if next.ComputeID() == prev.ID {
+		return nil, false, nil
+	}
+	next.GeneratedAt = now
+	next.PrevID = prev.ID
+	next.Diff = trust.ComputeDiff(prev, next)
+	return next, true, nil
 }
 
 // ingestLOTL fetches and verifies the LOTL, processing the pivot chain when

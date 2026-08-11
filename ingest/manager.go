@@ -17,10 +17,13 @@ import (
 	"github.com/go-make-bytes/trust-anchor/trust"
 )
 
-// Refresher runs one ingestion cycle (implemented by Pipeline; faked in
-// tests).
+// Refresher runs ingestion work (implemented by Pipeline; faked in tests):
+// Refresh is one full upstream cycle; RefreshDeclared rebuilds a snapshot
+// from freshly loaded operator-declared sources only, with no upstream
+// fetch.
 type Refresher interface {
 	Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error)
+	RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.Snapshot, bool, error)
 }
 
 // Manager owns the active snapshot and bootstrap state: startup bootstrap
@@ -118,6 +121,55 @@ func (m *Manager) SetRefresher(r Refresher) {
 	m.mu.Unlock()
 }
 
+// ReconcileDeclared re-reads the operator-declared sources (overlay +
+// internal) against the active snapshot and activates the result when they
+// changed — no upstream fetch, so it works with the LOTL unreachable. The
+// server runs it at boot right after Initialize, so a restart activates an
+// edited declaration immediately; Refresh runs the same reconcile before
+// every cycle. Reports whether anything changed.
+func (m *Manager) ReconcileDeclared(ctx context.Context) bool {
+	ctx = context.WithoutCancel(ctx)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, changed := m.reconcileDeclared(ctx, m.active.Load())
+	return changed
+}
+
+// reconcileDeclared re-reads the declared sources against prev and, when
+// they changed, persists and activates the rebuilt snapshot. Returns the
+// snapshot subsequent work should build on and whether anything changed.
+// The caller holds m.mu.
+func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (*trust.Snapshot, bool) {
+	if prev == nil {
+		// Nothing restored or served yet — first activation belongs to the
+		// full cycle.
+		return nil, false
+	}
+	next, changed, err := m.pipeline.RefreshDeclared(prev, time.Now().UTC())
+	if err != nil {
+		m.log.Error("declared-source reconcile failed — keeping current snapshot", zap.Error(err))
+		return prev, false
+	}
+	if !changed {
+		return prev, false
+	}
+	if err := m.store.SaveSnapshot(ctx, next); err != nil {
+		// Serving fresh declared data beats failing the reconcile; the next
+		// cycle retries persistence.
+		m.events.RefreshFailure(nil, "persist", err.Error())
+		m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
+	}
+	m.active.Store(next)
+	if !next.Diff.Empty() {
+		for _, e := range next.Diff.Entries {
+			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
+		}
+	}
+	m.log.Info("operator-declared sources reconciled into a new snapshot",
+		zap.String("snapshot", next.ID), zap.String("previous", prev.ID))
+	return next, true
+}
+
 // Refresh runs one ingestion cycle. On failure the previous snapshot stays
 // active and a security event is raised — the one unacceptable failure mode
 // is serving unverified or partial data, not serving slightly old data.
@@ -132,19 +184,24 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 	prev := m.active.Load()
 	boot := m.bootstrap.Load()
 
+	// Declared sources first: an operator edit takes effect on this trigger
+	// even when the upstream fetch below fails — that error path would
+	// otherwise return before the cycle's own declared load ever runs.
+	prev, declaredChanged := m.reconcileDeclared(ctx, prev)
+
 	next, err := m.pipeline.Refresh(ctx, prev, boot)
 	if err != nil {
 		m.events.RefreshFailure(nil, "cycle", err.Error())
 		m.log.Error("refresh cycle failed — keeping last good snapshot", zap.Error(err))
-		return prev, false, err
+		return prev, declaredChanged, err
 	}
 
-	changed := prev == nil ||
+	cycleChanged := prev == nil ||
 		next.ID != prev.ID ||
 		!pendingEqual(prev.Pending, next.Pending) ||
 		carriedOverChanged(prev, next)
 
-	if changed {
+	if cycleChanged {
 		if err := m.store.SaveSnapshot(ctx, next); err != nil {
 			// Serving fresh verified data beats failing the cycle; the next
 			// cycle retries persistence.
@@ -154,12 +211,13 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 	}
 	m.active.Store(next)
 
-	if changed && !next.Diff.Empty() {
+	if cycleChanged && !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
 			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
 		}
 	}
 
+	changed := declaredChanged || cycleChanged
 	m.log.Info("refresh cycle complete",
 		zap.String("snapshot", next.ID),
 		zap.Bool("changed", changed),

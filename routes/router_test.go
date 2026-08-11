@@ -54,6 +54,12 @@ func (f *fakeRefresher) Refresh(_ context.Context, prev *trust.Snapshot, boot *t
 	return &snap, nil
 }
 
+// RefreshDeclared reports the declared sources unchanged — route tests drive
+// declared-source scenarios at the ingest level, not through HTTP.
+func (f *fakeRefresher) RefreshDeclared(*trust.Snapshot, time.Time) (*trust.Snapshot, bool, error) {
+	return nil, false, nil
+}
+
 func testCertDER(t testing.TB, cn string) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

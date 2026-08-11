@@ -147,7 +147,14 @@ func (a *App) Start() error {
 	if snap := a.manager.Active(); snap == nil {
 		a.Log().Info("no persisted snapshot — the refresh task will build the first one on start")
 	} else {
-		a.Log().Info("serving restored snapshot", zap.String("snapshot", snap.ID))
+		// Re-read the operator-declared sources against the restored
+		// snapshot: a restart activates an edited declaration immediately,
+		// whether or not the trusted-list upstream is reachable.
+		if a.manager.ReconcileDeclared(a.BackgroundContext()) {
+			a.Log().Info("operator-declared sources changed while down — activated the re-read set",
+				zap.String("snapshot", a.manager.Active().ID))
+		}
+		a.Log().Info("serving restored snapshot", zap.String("snapshot", a.manager.Active().ID))
 	}
 	return a.App.Start()
 }
