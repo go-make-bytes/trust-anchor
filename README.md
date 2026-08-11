@@ -472,10 +472,42 @@ When a list changes shape or yearly, refresh the fixtures under `testdata/` (the
 
 ---
 
+## Conformance position (ETSI TS 119 615)
+
+`[ETSI TS 119 615 V1.4.1]` defines the procedures a relying implementation applies when reading
+EU trusted lists. This service implements the **authentication and extraction** half and was
+read clause-by-clause against §4 (2026-08); the deliberate scope boundaries below are design,
+not omissions — recorded here so they are not rediscovered as defects.
+
+- **Per-certificate determinations are the validators' job.** EU qualified-certificate
+  determination `[ETSI TS 119 615 V1.4.1 §4.4.4]`, QSCD determination `[ETSI TS 119 615 V1.4.1
+  §4.5.4]` and token-issuer qualification `[ETSI TS 119 615 V1.4.1 §4.6.4]` need the end-entity
+  certificate in hand (its `QcSSCD` statement, policy OIDs, issuer names). The per-anchor
+  `qualifiers`, `qcWithQscd` and `uses` this service serves are **routing metadata for bundle
+  filtering**, not a determination: trusted-list qualifiers formally apply to the end-entity
+  certificates matched by each qualification element's criteria `[ETSI TS 119 612 V2.4.1
+  §5.5.9.2.3]`, which only a validator holding the certificate can evaluate. Consumers making
+  qualification decisions run the §4.4/§4.5 procedures themselves.
+- **Service history is not extracted.** Bundles serve **current** trust; point-in-time status
+  resolution (`Service history instance` selection, `[ETSI TS 119 615 V1.4.1 §4.3.4]`) belongs
+  to signature validation. "Was this CA granted at signing time" cannot be answered from a
+  bundle, by design.
+- **The trust root does not rotate itself.** The standard permits automatic update of the OJEU
+  location and LOTL signer set from list content (`[ETSI TS 119 615 V1.4.1 §4.1.4]`
+  PRO-4.1.4-16/-17); here the root set is operator-pinned, the advertised OJ reference is
+  surfaced for comparison, and a divergence raises an alert instead of a silent rotation —
+  changing the trust root is a human decision.
+- **National-TL staleness is a warning, not a failure** — the same posture the standard itself
+  takes for TLs past `NextUpdate` (`[ETSI TS 119 615 V1.4.1 §4.2.4]` PRO-4.2.4-10). The
+  configurable grace window and the fail-safe carry-over are documented extensions on top.
+
+---
+
 ## Known limitations
 
 - **`source/` is a scaffold.** The multi-source adapter contract (wallet-provider lists, QTSP lists, certified-wallet lists, RP registries) is defined but not yet wired into the pipeline; today's ingestion is the LOTL + national-TL + overlay + internal-source path described above. Migrating the existing ingestion onto the adapters is a trust-critical refactor whose acceptance bar is byte-identical output.
 - **EUDI actor trust is operator-declared, not upstream.** Until the EU publishes machine-readable trust lists for the new EUDI actor types, typed anchors come only from `INTERNAL_TRUST_SOURCE` — a direct-trust file, not an XML-DSig-verified list.
 - **No file-watcher.** The internal trust source and the overlay are re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.
-- **`qscdOnly` fidelity depends on the upstream list.** It maps the `QCWithQSCD` qualifier as published; some national lists carry it only on historical entries.
+- **`qscdOnly` fidelity depends on the upstream list — and the flag currently maps `QCWithQSCD` only.** Services qualified `QCQSCDManagedOnBehalf` (a QSCD managed on the subscriber's behalf — the remote/cloud-signing certification, which `[ETSI TS 119 615 V1.4.1 §4.5.4]` Table 7 counts as QSCD-positive alongside `QCWithQSCD`) are served with `qcWithQscd: false` today; a `qscd=true` bundle excludes them. Known defect, fix pending. Some national lists also carry the qualifier only on historical entries.
+- **Duplicate-certificate service entries are merged, first entry wins.** When one certificate appears under several service entries, only the first (in deterministic sort order) contributes `uses`/`qualifiers`; `[ETSI TS 119 615 V1.4.1 §4.3.4]` instead classifies such duplication and treats conflicting statuses as an error. No configured territory's list currently contains duplicate-certificate entries; known limitation until the extractor's type-widening rework.
 - **Single object-store / single DB endpoint.** The S3, filesystem and Postgres backends each target one endpoint; there is no built-in multi-region replication beyond what the chosen backend provides.
