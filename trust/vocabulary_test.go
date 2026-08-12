@@ -129,3 +129,22 @@ func TestServableServiceType(t *testing.T) {
 		}
 	}
 }
+
+// The service-status URIs are published ones too — the registered Svcstatus
+// URIs of [ETSI TS 119 612 V2.4.1]. Pinned here as LITERALS on purpose:
+// asserting a produced status against the very constant that produced it is
+// self-referential and passes no matter what the constant says, so it cannot
+// catch a mistyped or invented status URI.
+func TestStatusIdentifiersArePublished(t *testing.T) {
+	if got, want := statusBase, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/"; got != want {
+		t.Errorf("statusBase = %q, want %q", got, want)
+	}
+	if got, want := grantedStatusURI, "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted"; got != want {
+		t.Errorf("grantedStatusURI = %q, want %q", got, want)
+	}
+	// The default assigned to a declared anchor must be the granted URI the
+	// base composes — the two constants are declared separately and could drift.
+	if grantedStatusURI != statusBase+"granted" {
+		t.Errorf("grantedStatusURI %q disagrees with statusBase+\"granted\" %q", grantedStatusURI, statusBase+"granted")
+	}
+}
