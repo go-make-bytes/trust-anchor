@@ -16,7 +16,7 @@ import (
 
 // S3 is the production Store: versioned snapshot/bootstrap JSON objects in an
 // S3-API bucket (the platform object-storage standard). minio-go is used as
-// the S3 client (see DECISIONS.md).
+// the S3 client.
 type S3 struct {
 	client *minio.Client
 	bucket string

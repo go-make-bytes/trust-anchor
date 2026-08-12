@@ -139,7 +139,7 @@ flowchart TB
     TASK -. kick .-> MGR
 ```
 
-Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`ingest/`](ingest) fetcher, pipeline, pivot walk, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission. Design rationale for the trickier parts (XML-DSig profile adaptations, the pivot algorithm) is recorded in [`DECISIONS.md`](DECISIONS.md).
+Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`ingest/`](ingest) fetcher, pipeline, pivot walk, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission.
 
 ### Ingest → verify → snapshot → serve
 
@@ -381,6 +381,11 @@ Two operating notes that are easy to learn the hard way:
 - **Background events carry no request correlation id**, because refresh cycles run outside any
   request. They are written to the service log in the same structured shape as request-scoped
   events, so they are searchable by event type — just not joinable to a caller.
+- **Some trusted-list hosts are picky about the client.** The EE list host (`sr.riik.ee`) returns
+  403 to Go's default User-Agent while serving browsers fine, so the fetcher sends an identifying
+  `User-Agent: trust-anchor/1.0 (eSignature-Portal trusted-list ingester)`. And at least one LOTL
+  pointer has used a plain `http://` location — the https-only egress rule correctly refuses such
+  a territory if it is ever configured; that refusal is the guard working, not a bug.
 
 If logs are collected with Loki, the whole stream for this service is:
 

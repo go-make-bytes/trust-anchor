@@ -23,7 +23,6 @@ const dsigNamespace = "http://www.w3.org/2000/09/xmldsig#"
 // so a plain Validate would now work on tens-of-thousands-of-element trusted
 // lists too; passing the located element is strictly tighter — it keeps the
 // direct-child profile check and avoids any traversal of untrusted input.)
-// See DECISIONS.md D1/D14.
 func findEnvelopedSignature(root *etree.Element) (*etree.Element, error) {
 	for _, child := range root.ChildElements() {
 		if child.Tag == "Signature" && resolveNamespace(child, child.Space) == dsigNamespace {

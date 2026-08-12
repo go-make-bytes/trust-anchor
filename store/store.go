@@ -2,7 +2,7 @@
 // bootstrap state. The platform standard is S3-API object storage; a
 // filesystem backend exists for development and a memory backend for tests.
 // There is intentionally no relational database — the dataset is tens of
-// certificates plus metadata (see DECISIONS.md).
+// certificates plus metadata.
 package store
 
 import (
