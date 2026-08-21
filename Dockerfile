@@ -6,7 +6,11 @@ WORKDIR /src
 COPY . .
 
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+# VERSION is supplied by ci.yml (build-args) and reaches the binary through -X.
+# Without both halves the pipeline computes a version that is thrown away and
+# every log line reports the dev default instead of the build that is running.
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.Version=${VERSION}" -o /out/server ./cmd/server
 
 FROM ghcr.io/wntrtech/scratch:v1.0.0-3
 COPY --from=build /out/server /server
