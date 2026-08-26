@@ -38,6 +38,12 @@ fixtures and comments are checked against, and cite clauses in the same bracket 
 ## Proposing a change
 
 - Work on a branch and open a pull request against `develop`.
+- **Sign off every commit.** This project uses the
+  [Developer Certificate of Origin](https://developercertificate.org/): by adding a
+  `Signed-off-by: Your Name <you@example.org>` line you certify that you wrote the change or
+  otherwise have the right to submit it under this project's licence. `git commit -s` adds the
+  line for you; the name and address must match the commit author. A pull request whose commits
+  lack it fails the DCO check and cannot be merged.
 - Keep the change focused: one concern per pull request.
 - A change in behaviour comes with a test that fails without it.
 - Match the style around you — naming, error handling, comment density. Comments
