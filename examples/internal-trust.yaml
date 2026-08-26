@@ -1,0 +1,72 @@
+# examples/internal-trust.yaml — worked example for INTERNAL_TRUST_SOURCE.
+#
+# This is a TEMPLATE, not a deployable file: the certificate blocks below are
+# placeholders, not real key material. Copy this file, replace every
+# "<PASTE ... PEM HERE>" placeholder with your OWN operator-controlled
+# certificate (inline, or point `certificateFile` at a path next to this
+# file), delete the entries you don't need, and point
+# INTERNAL_TRUST_SOURCE at your copy.
+#
+# This file is a trust root once it's real: every entry is a certificate the
+# service trusts directly, with no upstream trusted-list / XMLDSig chain
+# behind it (the same posture as LOTL_BOOTSTRAP_CERTS_PATH). Treat it like
+# key material — ownership, review, change control — not like ordinary
+# config. See README.md "The internal trust source" for the full semantics
+# (fail-closed whole-file validation, immediate activation, no hold mode,
+# re-read on every refresh cycle — edit, then trigger a refresh).
+#
+# `type` must be one of the closed EUDI taxonomy (trust.AnchorTypes):
+#   pid_provider   qeaa_provider   pub_eaa_provider   eaa_provider
+#   wallet_provider   access_ca   wrprc_issuer
+#   pid_provider_status   qeaa_provider_status   pub_eaa_provider_status   eaa_provider_status
+# An unrecognized type rejects the WHOLE file — there is no partial load.
+
+anchors:
+  # --- PID issuer: the CA that signs your wallet's PID-issuance certificates.
+  - name: "Operator PID Issuer CA"
+    type: pid_provider
+    territory: LV                       # ISO 3166-1 alpha-2, or "EU" for a pan-European service
+    status: granted                     # optional; defaults to the TS 119 612 "granted" status URI
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      <PASTE YOUR PID ISSUER CA CERTIFICATE PEM HERE>
+      -----END CERTIFICATE-----
+    # validUntil is optional and can only ever SHORTEN the anchor's life: it
+    # is capped to min(declared, certificate NotAfter), never extends past
+    # what the certificate itself allows.
+    validUntil: 2028-12-31T00:00:00Z
+
+  # --- Access CA: issues the WRPACs relying parties present to wallets.
+  - name: "Operator Access CA"
+    type: access_ca
+    territory: LV
+    # certificateFile is the alternative to inline `certificate` — exactly
+    # one of the two must be set. Path is resolved relative to this file.
+    certificateFile: access-ca.pem      # <- place your Access CA cert next to this file, e.g. examples/access-ca.pem
+
+  # --- Wallet provider: the signer that attests wallet-instance integrity.
+  - name: "Operator Wallet Provider Signer"
+    type: wallet_provider
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      <PASTE YOUR WALLET PROVIDER SIGNER CERTIFICATE PEM HERE>
+      -----END CERTIFICATE-----
+
+  # --- Status signer: only needed when a DISTINCT key signs your status
+  # lists (Token Status List / Identifiers List) rather than reusing the
+  # issuer's own signing key. Omit this entry entirely if your PID issuer
+  # signs its own status lists — a consumer that queries a `*_status` type
+  # with nothing declared correctly gets an empty set and falls back to the
+  # matching issuer-provider anchor on its side.
+  - name: "Operator PID Status List Signer"
+    type: pid_provider_status
+    territory: LV
+    certificate: |
+      -----BEGIN CERTIFICATE-----
+      <PASTE YOUR STATUS LIST SIGNER CERTIFICATE PEM HERE>
+      -----END CERTIFICATE-----
+    # useCases is only meaningful on the (Q)EAA/PubEAA provider types (EAA
+    # use-case accreditation); left empty here since a PID status signer is
+    # not use-case-scoped.
+    useCases: []

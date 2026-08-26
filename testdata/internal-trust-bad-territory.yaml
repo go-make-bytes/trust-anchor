@@ -1,0 +1,5 @@
+# Fixture for TestLoadInternalBadTerritory: not a 2-letter code (or EU).
+anchors:
+  - name: "Bad Territory Anchor"
+    type: access_ca
+    territory: USA

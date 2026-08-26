@@ -1,0 +1,23 @@
+{
+  "snapshot": "3f7a1c9e5b2d8f4a6c0e2b7d9f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b3d5f7a",
+  "generatedAt": "2026-07-01T06:00:00Z",
+  "stale": false,
+  "anchors": [
+    {
+      "territory": "EU",
+      "source": "tl",
+      "tspName": "EU Wallet Infrastructure",
+      "serviceName": "Wallet Access CA",
+      "serviceType": "http://uri.etsi.org/TrstSvc/Svctype/EUDI/AccessCA",
+      "status": "http://uri.etsi.org/TrstSvc/TrustedList/Svcstatus/granted",
+      "statusStartingTime": "2026-01-01T00:00:00Z",
+      "certDer": "MIIBzDCCAXGgAwIBAgIBATAKBggqhkjOPQQDAjBNMQswCQYDVQQGEwJFVTEgMB4GA1UEChMXV1AtMDYgc3ludGhldGljIGZpeHR1cmUxHDAaBgNVBAMTE0VVIFdhbGxldCBBY2Nlc3MgQ0EwHhcNMjYwMTAxMDAwMDAwWhcNMzYwMTAxMDAwMDAwWjBNMQswCQYDVQQGEwJFVTEgMB4GA1UEChMXV1AtMDYgc3ludGhldGljIGZpeHR1cmUxHDAaBgNVBAMTE0VVIFdhbGxldCBBY2Nlc3MgQ0EwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAARY7YVzy+s6ZcmO3IpUpANbW/hhRhObFP94YdA9W5uoi38TuzNEUDz1PZDnsj3QcihXo13e0GYBrD39CGE8k0KMo0IwQDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUYRnFDnkCD6IRZsp8bMpeoxqSG2kwCgYIKoZIzj0EAwIDSQAwRgIhAKUwm0p9TjiAtrzkSbPePCOcdxr/r7iyYvHombgvzeYVAiEA64gR+z5WW+C33WJvuonvdqwTNy5eNIPUKSMrxndwcsw=",
+      "fingerprintSha256": "98fa448704631f5b67115b69bd16a346c42052efb6f0fb65a84848b34f1b0f7f",
+      "subject": "CN=EU Wallet Access CA,O=WP-06 synthetic fixture,C=EU",
+      "notBefore": "2026-01-01T00:00:00Z",
+      "notAfter": "2036-01-01T00:00:00Z",
+      "qcWithQscd": false,
+      "tlSequence": 7
+    }
+  ]
+}
