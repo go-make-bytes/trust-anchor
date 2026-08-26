@@ -1,0 +1,17 @@
+# gitleaks configuration — extends the default rules; only the allowlist below is local.
+#
+# Full-history scans are part of this repository's publish checks. A finding that has been
+# examined and judged not to be a secret is recorded here, narrowly, so the judgement is
+# reviewable and the scan stays at zero instead of being re-triaged every time.
+
+[extend]
+useDefault = true
+
+# 2026-08-26 — testdata/oj-try.txt (removed from the tree the same day) was a captured
+# AWS WAF bot-challenge HTML page from a blocked Official Journal fetch. The flagged
+# "key" is the challenge's public, single-use token (window.gokuProps), not a credential.
+# Scoped to that one path in that one commit; nothing else is exempted.
+[[allowlists]]
+description = "Stray WAF challenge page in the initial commit — public challenge token, not a secret"
+commits = ["0fd7626098871cf83edcea9d3649a842c9136c91"]
+paths = ['''^testdata/oj-try\.txt$''']
