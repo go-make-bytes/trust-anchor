@@ -1,8 +1,24 @@
-# gitleaks configuration — extends the default rules; only the allowlist below is local.
+# gitleaks configuration — extends the default rules; the one allowlist below is local.
 #
-# Full-history scans are part of this repository's publish checks. A finding that has been
-# examined and judged not to be a secret is recorded here, narrowly, so the judgement is
-# reviewable and the scan stays at zero instead of being re-triaged every time.
+# Full-history scans are part of this repository's publish checks, and the bar is zero findings with
+# as few exemptions as possible.
+#
+# When a scan flags a test value, the fix is to REMOVE THE SHAPE, not to exempt it: build the value
+# from its parts at run time and there is nothing left to argue about. An exemption is a claim that
+# everyone who reads a green scan afterwards has to take on trust, forever; a generated value needs
+# no trust at all. The entry below is not that case — it exempts a captured third-party document, not
+# a value of ours.
+#
+# Two things decide whether an exemption does what you think. Both were measured on gitleaks v8.30.1:
+#
+#   * Pin it to the exact VALUE (`regexes`), never to the file that holds it (`paths`). A matching
+#     `paths` entry does not narrow the exemption — it switches the whole file off, so a real secret
+#     landing in that file later goes unreported and the scan still reports clean.
+#     `condition = "AND"` does not change this.
+#   * A `paths` regex that does NOT match is a silent no-op, and whether it matches depends on the
+#     scan mode: `dir` matches the path as scanned (`/repo/x.txt`), `git` a repo-relative one. The
+#     same anchored regex can work in one mode and do nothing in the other — so record the mode an
+#     exemption was verified in, or the next reader cannot tell a narrow entry from an inert one.
 
 [extend]
 useDefault = true
@@ -11,6 +27,12 @@ useDefault = true
 # AWS WAF bot-challenge HTML page from a blocked Official Journal fetch. The flagged
 # "key" is the challenge's public, single-use token (window.gokuProps), not a credential.
 # Scoped to that one path in that one commit; nothing else is exempted.
+#
+# Verified in `git` (history) mode, which is the only mode where it does anything: the path is
+# anchored repo-relative, so a `dir`-mode scan — which matches the path as scanned — never matches it
+# and the entry is inert there. That is not a defect here, because the file left the tree the same day
+# and a dir-mode scan has nothing to exempt. It is recorded because the anchoring is the reason, and
+# an entry whose effect depends on the invocation should say so rather than be rediscovered.
 [[allowlists]]
 description = "Stray WAF challenge page in the initial commit — public challenge token, not a secret"
 commits = ["0fd7626098871cf83edcea9d3649a842c9136c91"]
