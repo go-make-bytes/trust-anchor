@@ -95,7 +95,7 @@ require (
 	azugo.io/core v0.37.2
 	github.com/VictoriaMetrics/metrics v1.44.0
 	github.com/beevik/etree v1.7.1
-	github.com/gmb-lib/go-authbyte v0.19.0
+	github.com/gmb-lib/go-authbyte v0.20.0
 	github.com/gmb-lib/go-platform-kit v1.9.0
 	github.com/gmb-lib/go-sec-events v1.1.3
 	github.com/go-quicktest/qt v1.102.0
