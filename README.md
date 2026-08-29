@@ -225,7 +225,7 @@ The store backend is derived from configuration (`store.StoreBackend`):
 
 | Backend | Selected by | Use |
 |---|---|---|
-| **postgres** | `TRUST_STORE_DSN` set (takes precedence) | Scaled / multi-instance deployments |
+| **postgres** | `TRUST_STORE_DSN` set (takes precedence) | Scaled / multi-instance deployments. Pool size comes from the DSN itself — `pool_max_conns` (pgx reads it and strips it before Postgres sees it; its default is the host's CPU count): set it explicitly to the deployment's connection budget, e.g. `?sslmode=…&pool_max_conns=4&pool_min_conns=1`. |
 | **s3** | `TRUST_SNAPSHOT_BUCKET` set | Platform default (S3-API object storage) |
 | **fs** | `TRUST_SNAPSHOT_DIR` set | Local development |
 | **memory** | none of the above | Tests only — snapshots do not survive a restart |
