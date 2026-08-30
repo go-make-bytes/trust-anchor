@@ -4,6 +4,19 @@ Notable changes to this service, newest first. Dated rather than versioned: the 
 published per branch and commit, so what matters is what landed on a given day. This file is
 written for whoever runs the service or integrates against it.
 
+## 2026-08-30
+
+### Notes
+
+- **Dependency maintenance only — nothing observable changed.** The framework moved to
+  `azugo.io/azugo` and `azugo.io/core` v0.38.0, and the shared libraries to `go-authbyte` v0.20.1, `go-platform-kit` v1.10.0, `go-sec-events` v1.1.4. No route,
+  payload, error, environment variable, default or log field is affected, and the image behaves
+  exactly as the previous one.
+
+  The platform-kit release is additive on its own side (a size cap for a JetStream stream), and this
+  service does not configure one. Recorded here because a deployment that pins image digests will
+  see a new build with no accompanying behaviour note otherwise.
+
 ## 2026-08-26
 
 ### Added
