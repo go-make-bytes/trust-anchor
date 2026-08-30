@@ -322,7 +322,7 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 
 | Event | Severity | When |
 |---|---|---|
-| `trust.anchor_change` | high (add/remove), info (metadata) | A CA was added, removed, or changed in a bundle. Success-outcome, so logged at warn/info — a first ingest adding many anchors is not a wall of errors |
+| `trust.anchor_change` | warning (add/remove), info (metadata) | A CA was added, removed, or changed in a bundle. Noteworthy and worth a human looking, but the successful outcome of a refresh — so a first ingest adding many anchors is not a wall of errors |
 | `trust.pending_approved` | warning | A held addition was approved (via API or auto-release) |
 | `trust.refresh_failure` | warning | A cycle (or a persistence step) failed; the last good snapshot is still served |
 | `trust.stale` | warning | Served data is past `NextUpdate` + grace |
@@ -370,13 +370,13 @@ Review, do not alert:
 
 | Event | Why it matters |
 |---|---|
-| `trust.anchor_change` | The record of what changed and when — the first thing to read after any trust incident, and the only place a removed certificate authority is visible after the fact. High severity for add/remove, informational for metadata. |
+| `trust.anchor_change` | The record of what changed and when — the first thing to read after any trust incident, and the only place a removed certificate authority is visible after the fact. Warning severity for add/remove, informational for metadata. |
 | `trust.pending_approved` | A held addition became active, and whether a human or the auto-release did it. |
 | `authz.denied` | Occasional entries are normal (a misconfigured client). A sustained pattern from one caller is worth understanding. |
 
 Two operating notes that are easy to learn the hard way:
 
-- **A first ingest emits many `trust.anchor_change` events at high severity.** That is a populated
+- **A first ingest emits many `trust.anchor_change` events at warning severity.** That is a populated
   bundle, not an incident. Alert on the *rate after steady state*, not on presence.
 - **Background events carry no request correlation id**, because refresh cycles run outside any
   request. They are written to the service log in the same structured shape as request-scoped
