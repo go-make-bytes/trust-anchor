@@ -4,6 +4,26 @@ Notable changes to this service, newest first. Dated rather than versioned: the 
 published per branch and commit, so what matters is what landed on a given day. This file is
 written for whoever runs the service or integrates against it.
 
+## 2026-08-31
+
+### Changed
+
+- **A refused request now says which check it failed — in this service's log, never in the answer**
+  (`go-authbyte` v0.20.2). Until now the inbound gate refused with `401` and one undifferentiated
+  line: the error naming an expired token, a wrong audience or issuer, a bad signature or an unknown
+  key id was discarded, and four separate DPoP failures — proof did not verify, proof key is not the
+  token's key, replayed proof, and a token that is not sender-constrained at all — collapsed into a
+  single code. An expired service token and a forged one produced identical evidence.
+
+  **What changes for you:** refusals now carry a `refused a request at the auth gate` line at `warn`
+  with a `reason` field and the underlying error. **The response is byte-identical** — same status,
+  same body, same `WWW-Authenticate` — because telling a caller which check it failed hands an
+  attacker half the answer. Nothing to configure, and a request that was going to be accepted is
+  unaffected.
+
+  A `DPoP-Nonce` challenge is not a refusal and is unchanged: it is the protocol's own first-request
+  handshake, answered `401` with a fresh nonce and retried by the client.
+
 ## 2026-08-30
 
 ### Changed

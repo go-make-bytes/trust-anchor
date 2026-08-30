@@ -38,8 +38,8 @@ github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx5
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd+d3YzLmaI=
 github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
-github.com/gmb-lib/go-authbyte v0.20.1 h1:4PtsQSmtExuowBNdjk58i0kFTcdNgOlofNqo6uCDkno=
-github.com/gmb-lib/go-authbyte v0.20.1/go.mod h1:++n5lCYD+f6fuEuhv9itYH1GpQjpLAZ72VdK7tdvNgo=
+github.com/gmb-lib/go-authbyte v0.20.2 h1:Xcx0DFK0sbUbcwvXu+rhXbnjBBLE3eoD8vwyoEdiw3I=
+github.com/gmb-lib/go-authbyte v0.20.2/go.mod h1:L1nVmHM8/Dd0Eod4PzR2vLYFFvaeFf9X2pfcuQt/tWs=
 github.com/gmb-lib/go-platform-kit v1.11.0 h1:ITiO4R4az5LBuHl62gKr4OWh52rLqsuY1jES9o5i0kU=
 github.com/gmb-lib/go-platform-kit v1.11.0/go.mod h1:/ZCrZUjDBF+CniHa5xah3IfG0P7o6TqMYXK5ojvNkwU=
 github.com/gmb-lib/go-sec-events v1.2.0 h1:vzm8DnI1ZTvhrL5Ofn5opcPZiI371F6NyHHrmBk7Y+Y=
