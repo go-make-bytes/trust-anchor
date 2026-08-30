@@ -41,6 +41,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
+	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -96,13 +97,12 @@ require (
 	github.com/VictoriaMetrics/metrics v1.44.0
 	github.com/beevik/etree v1.7.1
 	github.com/gmb-lib/go-authbyte v0.20.1
-	github.com/gmb-lib/go-platform-kit v1.10.0
-	github.com/gmb-lib/go-sec-events v1.1.4
+	github.com/gmb-lib/go-platform-kit v1.11.0
+	github.com/gmb-lib/go-sec-events v1.2.0
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/lafriks/go-xmldsig/v2 v2.3.0
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/oklog/ulid/v2 v2.1.2
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/valyala/fasthttp v1.73.0

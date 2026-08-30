@@ -6,6 +6,33 @@ written for whoever runs the service or integrates against it.
 
 ## 2026-08-30
 
+### Changed
+
+- **A trust-anchor addition or removal is now `warning` severity, not `high`.** If you alert on
+  `severity: high` for `trust.anchor_change`, that rule stops matching — move it to `warning`.
+
+  These events were stamped `high` and then had their log level quietly capped at `warn`, so the two
+  channels disagreed: the line read `warn` while the `severity` field on the same line said `high`.
+  A rule reading severity saw something an operator watching levels never did. An anchor appearing
+  or disappearing is noteworthy and worth a human looking — but it is the successful, expected
+  outcome of a refresh, not a failure, and `warning` is what was meant all along. Both channels now
+  say it.
+
+  Nothing else moves: a metadata change stays `info`, a blocked egress stays `high`/`error`, and
+  every failure event keeps the level it had. Tests now pin each of those, so the distinction cannot
+  drift back unnoticed.
+
+- **Security events emitted from background work — the refresh Tasker — now take `go-sec-events`'
+  own background path** (`go-sec-events` v1.2.0, `go-platform-kit` v1.11.0) instead of this service
+  writing the sink's log line itself. The library had no entry point for a caller without a request
+  — passing one a nil request was a crash — so five services had each copied its field list, and a
+  SIEM selects on exactly those names.
+
+  **What else changes in the log stream:** the line now carries an `operation` field when the event
+  sets one. The `security_event` message and the field names are unchanged, and the request path is
+  untouched. It also closes a latent hole: with the broker sink configured, background events
+  previously had nowhere to go at all. This service uses the log sink, so its delivery is unchanged.
+
 ### Notes
 
 - **Dependency maintenance only — nothing observable changed.** The framework moved to

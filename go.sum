@@ -40,10 +40,10 @@ github.com/gabriel-vasile/mimetype v1.4.15 h1:05iP/CYtZ/w455R/KZM6rZ5ieAdh99UPtd
 github.com/gabriel-vasile/mimetype v1.4.15/go.mod h1:azpTcoLcDZRNgFou5j+APrqQx9HqVPWa6ijYQIIVswQ=
 github.com/gmb-lib/go-authbyte v0.20.1 h1:4PtsQSmtExuowBNdjk58i0kFTcdNgOlofNqo6uCDkno=
 github.com/gmb-lib/go-authbyte v0.20.1/go.mod h1:++n5lCYD+f6fuEuhv9itYH1GpQjpLAZ72VdK7tdvNgo=
-github.com/gmb-lib/go-platform-kit v1.10.0 h1:zh+YyqLcFf1cTnE+n1M0z4Qu+eEX8c0+q1eOb8uY4sI=
-github.com/gmb-lib/go-platform-kit v1.10.0/go.mod h1:/ZCrZUjDBF+CniHa5xah3IfG0P7o6TqMYXK5ojvNkwU=
-github.com/gmb-lib/go-sec-events v1.1.4 h1:CWAAG94+YTR+4BVYH9xpp3SclyL34BEsv6U+Mh+1wa4=
-github.com/gmb-lib/go-sec-events v1.1.4/go.mod h1:37KRMAxICBrjH517lKTcd8pL3yU0yjAR3Eq7+nJqAew=
+github.com/gmb-lib/go-platform-kit v1.11.0 h1:ITiO4R4az5LBuHl62gKr4OWh52rLqsuY1jES9o5i0kU=
+github.com/gmb-lib/go-platform-kit v1.11.0/go.mod h1:/ZCrZUjDBF+CniHa5xah3IfG0P7o6TqMYXK5ojvNkwU=
+github.com/gmb-lib/go-sec-events v1.2.0 h1:vzm8DnI1ZTvhrL5Ofn5opcPZiI371F6NyHHrmBk7Y+Y=
+github.com/gmb-lib/go-sec-events v1.2.0/go.mod h1:CEguzWoRfEtgAoYdSHXP/Gr5L6ZkkHLhYwa370VhA/8=
 github.com/go-jose/go-jose/v4 v4.1.4 h1:moDMcTHmvE6Groj34emNPLs/qtYXRVcd6S7NHbHz3kA=
 github.com/go-jose/go-jose/v4 v4.1.4/go.mod h1:x4oUasVrzR7071A4TnHLGSPpNOm2a21K9Kf04k1rs08=
 github.com/go-logr/logr v1.2.2/go.mod h1:jdQByPbusPIv2/zmleS9BjJVeZ6kBagPoEUsqbVz/1A=
