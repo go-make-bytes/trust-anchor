@@ -71,7 +71,7 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 | `GET /v1/anchors.json` | `trust:read` | Same filters — base64-DER certificates plus TSP/service metadata, qualifications, fingerprints, and `type` / `useCases` / `tlSequence` where set |
 | `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `internalCount` |
 | `POST /v1/pending/{fingerprint}/approve` | `trust:admin` | Approve a held addition (hold activation mode) |
-| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle |
+| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle. Answers `200` with a per-half report — the declared outcome and the cycle outcome stated separately, and `snapshot` always the id being served. `502` only when nothing has ever been served and the cycle failed |
 
 **Bundle filters** (shared by both `/v1/anchors*` routes, all optional):
 
@@ -203,13 +203,13 @@ The signer set is layered:
 
 **Rotation** is expected only every few years (the pivot chain handles interim signer rotations automatically). The snapshot's `advertisedOj` field is the signal: when it names an Official Journal reference newer than the pinned set, a fresh signer set has been published. Adopting it means updating `trust-config/` (drop the new PEMs in, regenerate the manifest, confirm each SHA-256 against the EU DSS oj-certificates service, rebuild the image) or mounting an updated manifest for an urgent change — see [`trust-config/README.md`](trust-config/README.md). `advertisedOj` drives no automatic trust decision; the trusted signer set is always the operator-pinned one.
 
-**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. A per-territory failure carries that territory's previous data over (marked `carriedOver`), so one unreachable national list never blocks the others. On the very first cycle there is nothing to carry over — a territory failure fails the cycle rather than serve a partial first snapshot. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error.
+**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. Every territory is an independent upstream and is treated as one: a per-territory failure carries that territory's previous data over (marked `carriedOver`), and a territory with **no** previous data (a fresh install, or a newly configured territory) is recorded in the snapshot as a **failed entry** (`failed` + `failureReason`, zero anchors) while the rest of the cycle completes — one broken national list never suppresses the twenty-six healthy ones, and a broken territory is visible instead of silently absent. The floor stays loud: the LOTL failing, or *every* configured territory failing with nothing to carry over, fails the whole cycle. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error. A failed entry contributes nothing to the snapshot id (health is a process outcome, not trust content), so consumer ETags move only when trust actually changes.
 
 ### The internal trust source — operator-declared EUDI anchors
 
 The EU has not yet published machine-readable trust lists for the newer EUDI actor types (PID providers, wallet providers, Access CAs, WRPRC issuers, (Q)EAA providers, status-list signers). Until it does, an operator running a real private trust ecosystem can declare those anchors directly via `INTERNAL_TRUST_SOURCE` (a YAML file; unset = feature off, zero behaviour change). The whole consuming fleet then resolves them through the same API, snapshots, ETags, staleness and events as TL-sourced anchors, and reads them back through the additive `type=` filter. A worked example lives at [`examples/internal-trust.yaml`](examples/internal-trust.yaml).
 
-Trust posture: an internal anchor carries the **same posture as the pinned bootstrap** — each declared certificate is trusted directly, with no signature chain behind it. The file *is* the security boundary; treat it as key material (ownership, review, change control). Entries activate immediately and bypass hold mode — deploying the file is the operator's approval. Loading is **fail-closed at whole-file granularity**: any invalid entry (unknown type, bad territory, wrong number of certificate sources, unparseable or expired certificate, duplicate fingerprint) rejects the entire file for that cycle, naming the offending entry by name and fingerprint — never by file contents. A bad edit after the first run carries the previous internal set over and raises `trust.internal_source_error`. The file is re-read **at boot** (the restored snapshot is reconciled against the file as it is now) and **on every refresh cycle** — and both work with the trusted-list upstream unreachable, which is exactly when a declared CA is most urgently needed. There is no file-watcher, so the operating habit is: **edit → `POST /v1/refresh` (or restart) → confirm the snapshot id changed** (`GET /v1/snapshot`). The parser is fuzzed and must never panic on malformed input.
+Trust posture: an internal anchor carries the **same posture as the pinned bootstrap** — each declared certificate is trusted directly, with no signature chain behind it. The file *is* the security boundary; treat it as key material (ownership, review, change control). Entries activate immediately and bypass hold mode — deploying the file is the operator's approval. Loading is **fail-closed at whole-file granularity**: any invalid entry (unknown type, bad territory, wrong number of certificate sources, unparseable or expired certificate, duplicate fingerprint) rejects the entire file for that cycle, naming the offending entry by name and fingerprint — never by file contents. A bad edit after the first run carries the previous internal set over and raises `trust.internal_source_error`. The file is re-read **at boot** (the restored snapshot is reconciled against the file as it is now) and **on every refresh cycle** — and both work with the trusted-list upstream unreachable, which is exactly when a declared CA is most urgently needed. There is no file-watcher, so the operating habit is: **edit → `POST /v1/refresh` (or restart) → confirm the snapshot id changed** (`GET /v1/snapshot`). The refresh response reports the declared half explicitly (`declared.changed`, plus `carriedOver` + `error` when the load failed), so an upstream outage can never mask what happened to the declared set. One gotcha worth knowing: change detection is fingerprint-based, so a **metadata-only edit** (an entry's `name` or `territory` label) is silently a no-op — served `serviceName` comes from the certificate subject, not the declaration; to change what is served, add or remove a certificate. The parser is fuzzed and must never panic on malformed input.
 
 ### Hold mode and change governance
 
@@ -252,6 +252,21 @@ curl -H "Authorization: Bearer $TOKEN" -H "DPoP: $PROOF" \
 curl "https://trust-anchor:8080/v1/anchors.json?type=access_ca"
 curl -X POST -H "X-API-Key: $TRUST_ADMIN_KEY" "https://trust-anchor:8080/v1/refresh"
 ```
+
+A refresh answers with both halves of what it did — the declared reconcile and the upstream cycle
+— and `snapshot` is always the id being served as it answers:
+
+```json
+{
+  "snapshot": "7c25d7ad…",
+  "changed": true,
+  "declared": { "changed": true },
+  "cycle": { "ok": true, "territories": { "ok": 26, "failed": ["DE"] } }
+}
+```
+
+With the upstream unreachable, `declared` still reports truthfully (`cycle.ok` goes `false` with
+the error; `territories` is omitted — a failed cycle produced no per-territory outcomes).
 
 ---
 
@@ -317,6 +332,7 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 | `trust_sync_last_success_timestamp_seconds` | gauge | Unix time of the last successful refresh cycle. `0` until the first success — `time() - value` alerting catches both "never" and "stopped" |
 | `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
 | `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of the operator-declared source (`internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
+| `trust_territory_failed{territory}` | gauge 0/1 | `1` while the territory is served as a failed entry (its list could not be ingested and no previous data exists — zero anchors for it). The alerting answer to silent degradation: a wide territory set quietly shrinking to a few healthy lists is visible without diffing snapshots. Same posture as the declared gauge — never a health flip |
 
 ### Security events
 

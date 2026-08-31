@@ -270,16 +270,141 @@ func TestRefreshFailsWhenLOTLUnavailableAndNoPrev(t *testing.T) {
 	}
 }
 
-func TestRefreshFailsOnFirstRunTerritoryError(t *testing.T) {
+// TestRefreshPartialFirstSnapshot: a territory failing with no previous data
+// is recorded as a failed entry and the rest of the cycle completes — the
+// healthy territories are served, the broken one is named.
+func TestRefreshPartialFirstSnapshot(t *testing.T) {
 	ft := newFixtureTransport()
 	ft.status[lvURL] = 500
 	p := testPipeline(t, ft, ModeAuto)
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 
-	// No previous data to fall back on — a partial first snapshot must never
-	// be produced.
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatalf("one broken territory failed the whole first cycle: %v", err)
+	}
+
+	lv := snap.Territory("LV")
+	if lv == nil {
+		t.Fatal("failed territory missing from the snapshot entirely")
+	}
+	if !lv.Failed || lv.FailureReason == "" {
+		t.Fatalf("LV not recorded as failed: %+v", lv)
+	}
+	if len(lv.Anchors) != 0 || lv.CarriedOver {
+		t.Fatalf("failed territory carries data: %+v", lv)
+	}
+	ee := snap.Territory("EE")
+	if ee == nil || ee.Failed || len(ee.Anchors) != 11 {
+		t.Fatalf("healthy territory suppressed by the broken one: %+v", ee)
+	}
+}
+
+// TestRefreshAllTerritoriesFailedFirstRunFails: the floor — when every
+// configured territory failed and nothing has data, no snapshot forms.
+func TestRefreshAllTerritoriesFailedFirstRunFails(t *testing.T) {
+	ft := newFixtureTransport()
+	ft.status[lvURL] = 500
+	ft.status[eeURL] = 500
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
 	if _, err := p.Refresh(context.Background(), nil, boot); err == nil {
-		t.Fatal("cycle produced a partial first snapshot")
+		t.Fatal("cycle produced a snapshot with zero verified territories")
+	}
+}
+
+// TestRefreshAllTerritoriesCarriedOverStillSucceeds pins the floor's
+// boundary: with previous data everywhere, an all-territories outage is a
+// carry-over cycle, not a floor failure (serving slightly old data beats
+// serving nothing).
+func TestRefreshAllTerritoriesCarriedOverStillSucceeds(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	good, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ft.status[lvURL] = 500
+	ft.status[eeURL] = 500
+	snap, err := p.Refresh(context.Background(), good, boot)
+	if err != nil {
+		t.Fatalf("all-carry-over cycle failed: %v", err)
+	}
+	for _, code := range []string{"LV", "EE"} {
+		tr := snap.Territory(code)
+		if tr == nil || !tr.CarriedOver || tr.Failed {
+			t.Fatalf("%s not carried over: %+v", code, tr)
+		}
+	}
+}
+
+// TestRefreshFailedTerritoryStaysFailedThenRecovers: a failed entry is not
+// "previous data" — while the upstream stays broken the territory stays a
+// failed entry (never a carry-over of nothing), and the snapshot id does not
+// move; when the upstream heals, the territory ingests normally.
+func TestRefreshFailedTerritoryStaysFailedThenRecovers(t *testing.T) {
+	ft := newFixtureTransport()
+	ft.status[lvURL] = 500
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	first, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := p.Refresh(context.Background(), first, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lv := second.Territory("LV")
+	if lv == nil || !lv.Failed || lv.CarriedOver || len(lv.Anchors) != 0 {
+		t.Fatalf("still-broken territory not a failed entry: %+v", lv)
+	}
+	if second.ID != first.ID {
+		t.Error("snapshot id moved on an unchanged failed territory")
+	}
+
+	delete(ft.status, lvURL)
+	healed, err := p.Refresh(context.Background(), second, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lv = healed.Territory("LV")
+	if lv == nil || lv.Failed || len(lv.Anchors) != 5 {
+		t.Fatalf("healed territory did not ingest: %+v", lv)
+	}
+	if healed.ID == second.ID {
+		t.Error("snapshot id unchanged after a territory gained anchors")
+	}
+}
+
+// TestComputeIDExcludesFailedTerritories: a failed entry is a process
+// outcome, not trust content — the id of a snapshot with a failed territory
+// equals the id of the same snapshot without that entry.
+func TestComputeIDExcludesFailedTerritories(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	full, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withFailed, err := cloneSnapshot(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withFailed.Territories = append(withFailed.Territories, &trust.Territory{
+		Code: "DE", Failed: true, FailureReason: "unreachable", Anchors: []trust.Anchor{},
+	})
+	if withFailed.ComputeID() != full.ID {
+		t.Error("a failed territory entry moved the content id")
 	}
 }
 

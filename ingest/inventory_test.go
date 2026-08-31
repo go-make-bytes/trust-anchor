@@ -204,8 +204,8 @@ func TestRefreshSetsFreshnessAndVolumeGauges(t *testing.T) {
 	}
 
 	before := time.Now().UTC().Add(-time.Second)
-	if _, _, err := m.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
 	}
 
 	buf := gatherMetrics()
@@ -229,6 +229,10 @@ func TestRefreshSetsFreshnessAndVolumeGauges(t *testing.T) {
 	if !ok || failed != 0 {
 		t.Fatalf("trust_declared_source_failed internal = %v (present=%v), want 0", failed, ok)
 	}
+	tfailed, ok := metricValue(buf, `trust_territory_failed{territory="LV"}`)
+	if !ok || tfailed != 0 {
+		t.Fatalf("trust_territory_failed LV = %v (present=%v), want 0", tfailed, ok)
+	}
 
 	// The very first activation logs the inventory: the declared set went
 	// from nothing to something and there is no other record of it.
@@ -241,8 +245,8 @@ func TestRefreshSetsFreshnessAndVolumeGauges(t *testing.T) {
 	if err := os.WriteFile(internal, []byte("anchors: ["), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
 	}
 	failed, ok = metricValue(gatherMetrics(), `trust_declared_source_failed{source="internal"}`)
 	if !ok || failed != 1 {

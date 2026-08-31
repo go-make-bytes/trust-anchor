@@ -20,10 +20,11 @@ import (
 // would churn one per snapshot. Identity lives on the API (/v1/snapshot),
 // not in metrics.
 const (
-	metricSnapshotAge    = "trust_snapshot_age_seconds"
-	metricLastSuccess    = "trust_sync_last_success_timestamp_seconds"
-	metricAnchorsTotal   = "trust_anchors_total"
-	metricDeclaredFailed = "trust_declared_source_failed"
+	metricSnapshotAge     = "trust_snapshot_age_seconds"
+	metricLastSuccess     = "trust_sync_last_success_timestamp_seconds"
+	metricAnchorsTotal    = "trust_anchors_total"
+	metricDeclaredFailed  = "trust_declared_source_failed"
+	metricTerritoryFailed = "trust_territory_failed"
 )
 
 // Declared-source key used as the `source` label value and in load reports.
@@ -71,7 +72,47 @@ func setDeclaredSourceFailed(source string, failed bool) {
 var (
 	anchorGaugeMu   sync.Mutex
 	anchorGaugeSeen = map[string]*metrics.Gauge{}
+
+	territoryGaugeMu   sync.Mutex
+	territoryGaugeSeen = map[string]*metrics.Gauge{}
 )
+
+// setTerritoryFailedGauges recomputes the per-territory 0/1 failure gauge
+// from the snapshot now being served: 1 means the territory's list could not
+// be ingested and there was no previous data to carry over (a failed entry —
+// zero anchors served for it). Territories that left the snapshot are set to
+// 0 rather than left dangling. Alerting-layer only, the dashboard's answer
+// to silent degradation: a wide territory set quietly shrinking to a few
+// healthy lists must be visible without diffing snapshots.
+func setTerritoryFailedGauges(s *trust.Snapshot) {
+	values := map[string]float64{}
+	if s != nil {
+		for _, t := range s.Territories {
+			name := fmt.Sprintf(`%s{territory=%q}`, metricTerritoryFailed, t.Code)
+			if t.Failed {
+				values[name] = 1
+			} else {
+				values[name] = 0
+			}
+		}
+	}
+
+	territoryGaugeMu.Lock()
+	defer territoryGaugeMu.Unlock()
+	for name, g := range territoryGaugeSeen {
+		if _, live := values[name]; !live {
+			g.Set(0)
+		}
+	}
+	for name, v := range values {
+		g := territoryGaugeSeen[name]
+		if g == nil {
+			g = metrics.GetOrCreateGauge(name, nil)
+			territoryGaugeSeen[name] = g
+		}
+		g.Set(v)
+	}
+}
 
 // setAnchorGauges recomputes the volume gauges from the snapshot now being
 // served. Series that existed for the previous snapshot but not this one are

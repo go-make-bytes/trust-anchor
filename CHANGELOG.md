@@ -8,6 +8,45 @@ written for whoever runs the service or integrates against it.
 
 ### Changed
 
+- **One broken national trusted list no longer blocks every other territory.** Until now, a
+  territory failing with no previous data to fall back on aborted the whole ingestion cycle — on a
+  fresh install or after adding a territory, one unreachable list meant *nothing* was ingested.
+  (Measured against the real EU set: five of the twenty-seven national lists fail today, each for a
+  different reason, so a wide configuration could never complete a first cycle.) Now every
+  configured territory is attempted; one that fails with no previous data appears in the snapshot
+  as a **failed entry** — named, with the reason, serving zero anchors — while the healthy
+  territories are served. The floor stays loud: the LOTL failing, or every configured territory
+  failing with nothing to carry over, still fails the whole cycle and keeps the last good snapshot.
+  A failed entry does not move the snapshot id, so consumer ETags change only when trust changes.
+
+  **What changes for you:** `GET /v1/snapshot` territory rows may now carry `"failed": true` +
+  `"failureReason"`, and a new gauge `trust_territory_failed{territory}` (0/1) is exported for
+  alerting. Existing fields are unchanged.
+
+- **`POST /v1/refresh` now reports what actually happened, per half.** Previously an unreachable
+  upstream answered `502` with `"refresh failed; last good snapshot still served"` even when the
+  operator's declared-source edit *had* been applied and a *new* snapshot was already being served
+  — the response said the opposite of the truth on exactly the action (withdrawing or adding a
+  declared anchor during an outage) where that is most expensive. The route now answers `200` with
+  a per-half report; the `snapshot` field is always the id being served as it answers:
+
+  ```json
+  {
+    "snapshot": "7c25d7ad…",
+    "changed": true,
+    "declared": { "changed": true },
+    "cycle": { "ok": false, "error": "ingest: fetch LOTL: …" }
+  }
+  ```
+
+  On a completed cycle, `cycle.territories` summarizes the per-territory outcomes
+  (`{ "ok": 26, "failed": ["DE"], "carriedOver": [] }`). The old `snapshot` and `changed` fields
+  keep their meaning. `502` remains only for the case with no lie in it: nothing has ever been
+  served and the cycle failed, so no snapshot id exists to report. **If you scripted against the
+  old `502`-on-any-cycle-failure behaviour, read `cycle.ok` from the body instead**; monitoring
+  should alert on the `trust.refresh_failure` event and the `trust_sync_last_success_*` /
+  `trust_territory_failed` gauges, which are unchanged.
+
 - **A refused request now says which check it failed — in this service's log, never in the answer**
   (`go-authbyte` v0.20.2). Until now the inbound gate refused with `401` and one undifferentiated
   line: the error naming an expired token, a wrong audience or issuer, a bad signature or an unknown

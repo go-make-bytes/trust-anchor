@@ -98,15 +98,28 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
 	}
 
-	// National trusted lists.
+	// National trusted lists. Each territory is an independent upstream: one
+	// failing must not suppress the others, so failures accumulate as named
+	// failed entries instead of aborting the cycle. The floor below keeps
+	// the all-failed case a loud cycle failure.
 	territories := append([]string(nil), p.cfg.Territories...)
 	sort.Strings(territories)
+	withData := 0
 	for _, code := range territories {
 		t, err := p.ingestTerritory(ctx, lotl, code, prev, now)
 		if err != nil {
-			return nil, err
+			p.log.Warn("territory failed with no previous data — recorded as failed, cycle continues",
+				zap.String("territory", code), zap.Error(err))
+			next.Territories = append(next.Territories, &trust.Territory{
+				Code: code, Failed: true, FailureReason: err.Error(), Anchors: []trust.Anchor{},
+			})
+			continue
 		}
 		next.Territories = append(next.Territories, t)
+		withData++
+	}
+	if len(territories) > 0 && withData == 0 {
+		return nil, fmt.Errorf("ingest: every configured territory failed and none has previous data — refusing to build a snapshot with zero verified territories")
 	}
 
 	p.applyDeclaredSources(prev, next, now)
@@ -124,9 +137,10 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 
 // applyDeclaredSources loads the operator-declared anchor source — the
 // internal trust source — into next. A failed load never fails the cycle:
-// the previous set is carried over (the same fail-safe the territories
-// have) and the source's security event is emitted, because a typo in an
-// operator file must not take down trusted-list ingestion. The returned
+// the previous set is carried over unconditionally (an empty previous set
+// carries over as empty — unlike a territory, whose carry-over needs
+// previous data) and the source's security event is emitted, because a typo
+// in an operator file must not take down trusted-list ingestion. The returned
 // report (also attached to next) keeps the load outcomes distinguishable
 // for the inventory log — a carry-over produces the same anchor set as an
 // unchanged file, and only the report can tell them apart.
@@ -262,8 +276,8 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 
 // ingestTerritory fetches, verifies and extracts one national TL. On failure
 // it carries over the previous snapshot's territory data (fail-safe); when no
-// previous data exists the whole cycle fails — a partial first snapshot must
-// never be served.
+// previous data exists it returns the error and the caller records the
+// territory as failed — the rest of the cycle continues.
 func (p *Pipeline) ingestTerritory(ctx context.Context, lotl *tsl.TrustedList, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
 	t, err := p.fetchTerritory(ctx, lotl, code, prev, now)
 	if err == nil {
@@ -280,7 +294,10 @@ func (p *Pipeline) ingestTerritory(ctx context.Context, lotl *tsl.TrustedList, c
 	if prev != nil {
 		prevT = prev.Territory(code)
 	}
-	if prevT == nil {
+	if prevT == nil || prevT.Failed {
+		// A failed entry is not previous data — there is nothing to carry
+		// over, so the territory stays failed rather than becoming a
+		// carry-over of nothing.
 		return nil, fmt.Errorf("ingest: territory %s failed with no previous data to fall back on: %w", code, err)
 	}
 

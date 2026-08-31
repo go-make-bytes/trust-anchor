@@ -36,23 +36,26 @@ func (r *router) approvePending(ctx *azugo.Context) {
 //
 // @operationId TriggerRefresh
 // @title Trigger refresh cycle
-// @description Re-reads the operator-declared sources (applied even when the upstream is unreachable), then runs an immediate LOTL/TL ingestion cycle.
-// @success 200 RefreshResponse response.Refresh "Cycle result"
+// @description Re-reads the operator-declared sources (applied even when the upstream is unreachable), then runs an immediate LOTL/TL ingestion cycle. Answers 200 with a per-half report — the declared outcome and the cycle outcome are stated separately, and the snapshot id is always the one being served.
+// @success 200 RefreshResponse response.Refresh "Refresh report (both halves; snapshot = the id being served)"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"
-// @failure 502 string string "Refresh failed — last good snapshot still served"
+// @failure 502 string string "Nothing is served yet and the cycle failed — no snapshot exists to report"
 // @resource Governance
 // @route /v1/refresh [post].
 func (r *router) refresh(ctx *azugo.Context) {
 	if !r.requireScope(ctx, "admin") {
 		return
 	}
-	snap, changed, err := r.Manager().Refresh(ctx)
-	if err != nil {
-		ctx.Error(badGatewayError{err})
+	out := r.Manager().Refresh(ctx)
+	if out.Snapshot == nil {
+		// Nothing has ever been served and the cycle failed: there is no
+		// snapshot id an honest report could carry.
+		ctx.Error(badGatewayError{out.CycleErr})
 		return
 	}
-	ctx.JSON(&response.Refresh{Snapshot: snap.ID, Changed: changed})
+	ctx.JSON(response.NewRefresh(out.Snapshot, out.Changed,
+		out.DeclaredChanged, out.Declared.CarriedOver, out.Declared.Error, out.CycleErr))
 }
 
 // notFoundError maps a governance lookup failure to 404 with a safe message.
@@ -64,11 +67,13 @@ func (e notFoundError) SafeError() string {
 	return e.err.Error()
 }
 
-// badGatewayError maps an upstream ingestion failure to 502.
+// badGatewayError maps an upstream ingestion failure to 502. Reached only
+// when nothing has ever been served — once a snapshot exists, a refresh
+// answers 200 with the per-half report instead.
 type badGatewayError struct{ err error }
 
 func (e badGatewayError) Error() string   { return e.err.Error() }
 func (e badGatewayError) StatusCode() int { return 502 }
 func (e badGatewayError) SafeError() string {
-	return "refresh failed; last good snapshot still served"
+	return "refresh failed and no snapshot exists yet; nothing is served"
 }

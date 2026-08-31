@@ -86,11 +86,11 @@ func TestManagerRefreshAdoptsAndPersists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, changed, err := m.Refresh(context.Background())
-	if err != nil || !changed {
-		t.Fatalf("refresh: changed=%v err=%v", changed, err)
+	out := m.Refresh(context.Background())
+	if out.CycleErr != nil || !out.Changed {
+		t.Fatalf("refresh: changed=%v err=%v", out.Changed, out.CycleErr)
 	}
-	if m.Active().ID != got.ID {
+	if m.Active().ID != out.Snapshot.ID {
 		t.Fatal("active snapshot not swapped")
 	}
 
@@ -108,16 +108,16 @@ func TestManagerFailSafeKeepsLastGood(t *testing.T) {
 	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
 	}
 
 	fake.err = errors.New("upstream exploded")
-	prev, changed, err := m.Refresh(context.Background())
-	if err == nil || changed {
+	out := m.Refresh(context.Background())
+	if out.CycleErr == nil || out.Changed {
 		t.Fatal("failed cycle reported success")
 	}
-	if prev == nil || prev.ID != snap.ID || m.Active().ID != snap.ID {
+	if out.Snapshot == nil || out.Snapshot.ID != snap.ID || m.Active().ID != snap.ID {
 		t.Fatal("last good snapshot not kept after failure")
 	}
 }
@@ -159,8 +159,8 @@ func TestManagerApprovePending(t *testing.T) {
 	if err := m.Initialize(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.Refresh(context.Background()); err != nil {
-		t.Fatal(err)
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
 	}
 
 	if _, err := m.ApprovePending(nil, "nope", "ops"); err == nil {
@@ -188,5 +188,51 @@ func TestManagerApprovePending(t *testing.T) {
 	}
 	if m.Active().ID != next.ID {
 		t.Fatal("approved snapshot not active")
+	}
+}
+
+// TestManagerAdoptsTerritoryHealthFlip: territory health is outside the
+// content id, so a snapshot differing only by a failed entry keeps its id —
+// the manager must still adopt and serve it (the flip is a change), and the
+// per-territory failure gauge must reflect the served state.
+func TestManagerAdoptsTerritoryHealthFlip(t *testing.T) {
+	snap := managerSnapshot(t)
+	fake := &fakeRefresher{snap: snap}
+	m, st := managerForTest(t, fake)
+	seedBootstrap(t, st)
+	if err := m.Initialize(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+
+	flipped := managerSnapshot(t)
+	flipped.Territories = append(flipped.Territories, &trust.Territory{
+		Code: "DE", Failed: true, FailureReason: "unreachable", Anchors: []trust.Anchor{},
+	})
+	if flipped.ComputeID() != snap.ID {
+		t.Fatal("test premise broken: a failed entry moved the content id")
+	}
+	fake.snap = flipped
+
+	out := m.Refresh(context.Background())
+	if out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+	if !out.Changed {
+		t.Fatal("territory health flip not reported as a change")
+	}
+	de := m.Active().Territory("DE")
+	if de == nil || !de.Failed || de.FailureReason == "" {
+		t.Fatalf("failed territory not served: %+v", de)
+	}
+
+	buf := gatherMetrics()
+	if v, ok := metricValue(buf, `trust_territory_failed{territory="DE"}`); !ok || v != 1 {
+		t.Fatalf(`trust_territory_failed DE = %v (present=%v), want 1`, v, ok)
+	}
+	if v, ok := metricValue(buf, `trust_territory_failed{territory="LV"}`); !ok || v != 0 {
+		t.Fatalf(`trust_territory_failed LV = %v (present=%v), want 0`, v, ok)
 	}
 }

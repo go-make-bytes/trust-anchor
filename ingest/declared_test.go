@@ -267,14 +267,14 @@ func TestManagerRefreshAppliesDeclaredWhenCycleFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, changed, err := m.Refresh(context.Background())
-	if err == nil {
+	out := m.Refresh(context.Background())
+	if out.CycleErr == nil {
 		t.Fatal("cycle error swallowed")
 	}
-	if !changed {
+	if !out.Changed || !out.DeclaredChanged {
 		t.Fatal("declared change not reported through a failing refresh")
 	}
-	if got == nil || got.ID != s2.ID || m.Active().ID != s2.ID {
+	if out.Snapshot == nil || out.Snapshot.ID != s2.ID || m.Active().ID != s2.ID {
 		t.Fatal("declared reconcile result not active after a failing refresh")
 	}
 	persisted, perr := st.LoadLatestSnapshot(context.Background())
