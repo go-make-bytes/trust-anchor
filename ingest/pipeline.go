@@ -40,6 +40,26 @@ type Config struct {
 	// StaleGrace is the grace period past a list's NextUpdate before its data
 	// is flagged stale (served with a warning, never dropped).
 	StaleGrace time.Duration
+	// AllowHTTPTerritories names the territories whose trusted list may be
+	// fetched over plain http (TRUST_ALLOW_HTTP_TERRITORIES, default empty).
+	// Some publishers point their list at an http URL (Slovakia's LOTL
+	// pointer, whose https alternative serves a wrong-hostname certificate).
+	// Integrity never rests on transport — every list is XMLDSig-verified
+	// against the LOTL-pinned signers — so this waives only the
+	// defense-in-depth https rule, per named territory, on an explicit
+	// operator declaration. It never applies to the LOTL itself.
+	AllowHTTPTerritories []string
+}
+
+// allowsHTTP reports whether the operator opted the territory into
+// plain-http fetches.
+func (c *Config) allowsHTTP(code string) bool {
+	for _, t := range c.AllowHTTPTerritories {
+		if t == code {
+			return true
+		}
+	}
+	return false
 }
 
 // Pipeline executes one ingestion cycle: LOTL → pivots → national TLs →
@@ -353,6 +373,13 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 	ptr, err := lotl.PointerFor(code)
 	if err != nil {
 		return nil, err
+	}
+	if p.cfg.allowsHTTP(code) {
+		if err := p.fetcher.AllowHTTPFor(ptr.TSLLocation); err != nil {
+			return nil, err
+		}
+		p.log.Warn("territory trusted list will be fetched over plain http by explicit operator opt-in — integrity comes from the XMLDSig verification, not transport",
+			zap.String("territory", code), zap.String("url", ptr.TSLLocation))
 	}
 	if err := p.fetcher.AllowURL(ptr.TSLLocation); err != nil {
 		return nil, err

@@ -8,6 +8,19 @@ written for whoever runs the service or integrates against it.
 
 ### Added
 
+- **`TRUST_ALLOW_HTTP_TERRITORIES` — a per-territory plain-http opt-in for published http pointers.**
+  Slovakia's trusted list is the motivating case: the LOTL points at
+  `http://tl.nbu.gov.sk/kca/tsl/tsl.xml`, and the https alternative on the same host serves a
+  certificate that fails hostname verification — so under the https-only egress rule SK can never
+  ingest. A territory named in this variable (comma-separated; default **empty** — https stays
+  required) may be fetched over its published plain-http pointer. List **integrity does not rest on
+  transport**: every fetched list is XMLDSig-verified against the LOTL-pinned signer certificates
+  before anything trusts it — the opt-in waives only the defense-in-depth transport rule, per named
+  territory, and logs a loud line each cycle. It can never apply to the LOTL itself, and an http
+  pointer for a territory *not* named stays refused (a named failed entry). Verified live: with
+  `TRUST_TERRITORIES=EU` and `TRUST_ALLOW_HTTP_TERRITORIES=SK`, Slovakia ingests (TL seq 145,
+  12 CA/QC anchors).
+
 - **`TRUST_TERRITORIES` understands the group `EU`.** `TRUST_TERRITORIES=EU` expands — per cycle,
   from the freshly **verified** LOTL, never from a hardcoded list — to every territory the LOTL
   publishes an XML trusted-list pointer for: today the 27 member states (Greece under its

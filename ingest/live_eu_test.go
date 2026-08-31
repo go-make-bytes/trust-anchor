@@ -23,11 +23,12 @@ import (
 func TestLiveEUEnumeration(t *testing.T) {
 	fetcher := NewFetcher(60*time.Second, 20*1024*1024)
 	cfg := Config{
-		LOTLURL:          "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
-		Territories:      []string{"EU"},
-		AcceptedStatuses: []string{"granted"},
-		ActivationMode:   ModeAuto,
-		StaleGrace:       24 * time.Hour,
+		LOTLURL:              "https://ec.europa.eu/tools/lotl/eu-lotl.xml",
+		Territories:          []string{"EU"},
+		AllowHTTPTerritories: []string{"SK"},
+		AcceptedStatuses:     []string{"granted"},
+		ActivationMode:       ModeAuto,
+		StaleGrace:           24 * time.Hour,
 	}
 	log, _ := zap.NewDevelopment()
 	p := NewPipeline(cfg, fetcher, events.New(log), log)

@@ -23,6 +23,8 @@ const (
 	lotlURL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 	lvURL   = "https://trustlist.gov.lv/tsl/latvian-tsl.xml"
 	eeURL   = "https://sr.riik.ee/tsl/estonian-tsl.xml"
+	// The LOTL's SK pointer is plain http — the real published location.
+	skURL = "http://tl.nbu.gov.sk/kca/tsl/tsl.xml"
 )
 
 // fixtureTransport serves recorded fixtures for the real URLs — the pipeline
@@ -40,6 +42,7 @@ func newFixtureTransport() *fixtureTransport {
 			lotlURL: "eu-lotl.xml",
 			lvURL:   "lv-tsl.xml",
 			eeURL:   "ee-tsl.xml",
+			skURL:   "sk-tsl.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-282.xml": "eu-lotl-pivot-282.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-300.xml": "eu-lotl-pivot-300.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-335.xml": "eu-lotl-pivot-335.xml",
@@ -453,6 +456,67 @@ func TestRefreshEUGroupDedupesAndKeepsExplicitCodes(t *testing.T) {
 	ua := snap.Territory("UA")
 	if ua == nil || !ua.Failed || !strings.Contains(ua.FailureReason, "no XML trusted-list pointer") {
 		t.Fatalf("UA not a named failed entry: %+v", ua)
+	}
+}
+
+// TestRefreshHTTPTerritoryOptIn: a territory named in AllowHTTPTerritories
+// may be fetched over its published plain-http pointer (SK's real shape) —
+// the list still passes the same XMLDSig verification against the
+// LOTL-pinned signers, which is where integrity actually comes from.
+func TestRefreshHTTPTerritoryOptIn(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"LV", "SK"}
+	p.cfg.AllowHTTPTerritories = []string{"SK"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := snap.Territory("SK")
+	if sk == nil || sk.Failed {
+		t.Fatalf("opted-in http territory did not ingest: %+v", sk)
+	}
+	if len(sk.Anchors) == 0 {
+		t.Fatal("SK ingested but extracted no anchors")
+	}
+}
+
+// TestRefreshHTTPBlockedWithoutOptIn pins the default: an http pointer for a
+// territory NOT named in the opt-in stays refused by the egress policy and
+// becomes a named failed entry.
+func TestRefreshHTTPBlockedWithoutOptIn(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"LV", "SK"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := snap.Territory("SK")
+	if sk == nil || !sk.Failed || !strings.Contains(sk.FailureReason, "not https") {
+		t.Fatalf("http territory without opt-in not refused: %+v", sk)
+	}
+	if lv := snap.Territory("LV"); lv == nil || lv.Failed {
+		t.Fatalf("LV suppressed: %+v", lv)
+	}
+}
+
+// TestRefreshLOTLNeverHTTP: the opt-in is per national territory and can
+// never make an http LOTL acceptable — nothing on the LOTL path registers a
+// plain-http host.
+func TestRefreshLOTLNeverHTTP(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.LOTLURL = "http://ec.europa.eu/tools/lotl/eu-lotl.xml"
+	p.cfg.AllowHTTPTerritories = []string{"LV", "EE", "SK", "EU"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	if _, err := p.Refresh(context.Background(), nil, boot); err == nil {
+		t.Fatal("an http LOTL was accepted")
 	}
 }
 

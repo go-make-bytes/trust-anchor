@@ -86,6 +86,13 @@ type Configuration struct {
 
 	// TerritoriesRaw is the comma-separated territory list (e.g. "LV,EE").
 	TerritoriesRaw string `mapstructure:"trust_territories" validate:"required"`
+	// AllowHTTPTerritoriesRaw is the comma-separated list of territories whose
+	// trusted list may be fetched over plain http (default empty — https
+	// required). Integrity comes from the XMLDSig verification against the
+	// LOTL-pinned signers, never from transport; this waives only the
+	// defense-in-depth https rule, per named territory. Never applies to the
+	// LOTL itself.
+	AllowHTTPTerritoriesRaw string `mapstructure:"trust_allow_http_territories"`
 	// AcceptedStatusesRaw is the comma-separated accepted service statuses
 	// (names or full URIs; default granted).
 	AcceptedStatusesRaw string `mapstructure:"trust_accepted_statuses" validate:"required"`
@@ -171,6 +178,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("lotl_url", "LOTL_URL")
 	_ = v.BindEnv("lotl_bootstrap_certs_path", "LOTL_BOOTSTRAP_CERTS_PATH")
 	_ = v.BindEnv("trust_territories", "TRUST_TERRITORIES")
+	_ = v.BindEnv("trust_allow_http_territories", "TRUST_ALLOW_HTTP_TERRITORIES")
 	_ = v.BindEnv("trust_accepted_statuses", "TRUST_ACCEPTED_STATUSES")
 	_ = v.BindEnv("trust_refresh_interval", "TRUST_REFRESH_INTERVAL")
 	_ = v.BindEnv("trust_activation_mode", "TRUST_ACTIVATION_MODE")
@@ -236,6 +244,12 @@ func (c *Configuration) Validate(valid *validation.Validate) error {
 // Territories returns the parsed territory codes.
 func (c *Configuration) Territories() []string {
 	return splitTrim(c.TerritoriesRaw)
+}
+
+// AllowHTTPTerritories returns the parsed plain-http opt-in territory codes
+// (default none).
+func (c *Configuration) AllowHTTPTerritories() []string {
+	return splitTrim(c.AllowHTTPTerritoriesRaw)
 }
 
 // AcceptedStatuses returns the parsed accepted service statuses.
