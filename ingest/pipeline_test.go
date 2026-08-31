@@ -383,6 +383,79 @@ func TestRefreshFailedTerritoryStaysFailedThenRecovers(t *testing.T) {
 	}
 }
 
+// TestRefreshEUTerritoryGroup: TRUST_TERRITORIES=EU expands, per cycle, to
+// every territory the verified LOTL publishes an XML pointer for. The
+// fixtures serve only LV and EE, so those two ingest and every other
+// expanded territory becomes a named failed entry — the expansion and the
+// tolerance proven together.
+func TestRefreshEUTerritoryGroup(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"EU"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The recorded LOTL publishes 31 territories (pinned in the tsl package).
+	if len(snap.Territories) != 31 {
+		t.Fatalf("territories = %d, want 31", len(snap.Territories))
+	}
+	healthy := 0
+	for _, tr := range snap.Territories {
+		if !tr.Failed {
+			healthy++
+		}
+	}
+	if healthy != 2 {
+		t.Fatalf("healthy territories = %d, want 2 (LV, EE — the fixtures)", healthy)
+	}
+	if lv := snap.Territory("LV"); lv == nil || lv.Failed || len(lv.Anchors) != 5 {
+		t.Fatalf("LV not ingested under the EU group: %+v", lv)
+	}
+	if de := snap.Territory("DE"); de == nil || !de.Failed {
+		t.Fatalf("DE not a failed entry under the EU group: %+v", de)
+	}
+	if el := snap.Territory("EL"); el == nil {
+		t.Fatal("EL (Greece's publisher code) missing from the expansion")
+	}
+	if snap.Territory("EU") != nil {
+		t.Fatal("the LOTL self-pointer leaked into the territory set")
+	}
+}
+
+// TestRefreshEUGroupDedupesAndKeepsExplicitCodes: explicit codes combine with
+// the group without duplication, and a code the LOTL has no pointer for (UA)
+// is a named failed entry rather than an error — it starts working the day
+// its declared source exists.
+func TestRefreshEUGroupDedupesAndKeepsExplicitCodes(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"EU", "LV", "UA"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Territories) != 32 {
+		t.Fatalf("territories = %d, want 32 (31 from the LOTL + UA)", len(snap.Territories))
+	}
+	seen := map[string]int{}
+	for _, tr := range snap.Territories {
+		seen[tr.Code]++
+	}
+	if seen["LV"] != 1 {
+		t.Fatalf("LV appears %d times, want 1 (dedupe)", seen["LV"])
+	}
+	ua := snap.Territory("UA")
+	if ua == nil || !ua.Failed || !strings.Contains(ua.FailureReason, "no XML trusted-list pointer") {
+		t.Fatalf("UA not a named failed entry: %+v", ua)
+	}
+}
+
 // TestComputeIDExcludesFailedTerritories: a failed entry is a process
 // outcome, not trust content — the id of a snapshot with a failed territory
 // equals the id of the same snapshot without that entry.

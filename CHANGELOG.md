@@ -6,6 +6,18 @@ written for whoever runs the service or integrates against it.
 
 ## 2026-08-31
 
+### Added
+
+- **`TRUST_TERRITORIES` understands the group `EU`.** `TRUST_TERRITORIES=EU` expands — per cycle,
+  from the freshly **verified** LOTL, never from a hardcoded list — to every territory the LOTL
+  publishes an XML trusted-list pointer for: today the 27 member states (Greece under its
+  publisher code `EL`, not `GR`) plus IS, LI, NO and UK. Explicit codes combine with the group and
+  de-duplicate, so `EU,LV` equals `EU`, and `EU,UA` is legal: a code the LOTL has no pointer for
+  is served as a named `failed` territory entry (see below) rather than dropped or fatal — it
+  starts working the day a source for it exists. Membership changes in the LOTL flow in on the
+  LOTL's own clock, with hold mode (`TRUST_ACTIVATION_MODE=hold`) available if new anchors must
+  wait for an operator. The default stays `LV,EE`.
+
 ### Changed
 
 - **One broken national trusted list no longer blocks every other territory.** Until now, a

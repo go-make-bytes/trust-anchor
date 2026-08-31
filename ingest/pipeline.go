@@ -102,8 +102,7 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 	// failing must not suppress the others, so failures accumulate as named
 	// failed entries instead of aborting the cycle. The floor below keeps
 	// the all-failed case a loud cycle failure.
-	territories := append([]string(nil), p.cfg.Territories...)
-	sort.Strings(territories)
+	territories := expandTerritories(p.cfg.Territories, lotl)
 	withData := 0
 	for _, code := range territories {
 		t, err := p.ingestTerritory(ctx, lotl, code, prev, now)
@@ -133,6 +132,43 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 	next.Diff = trust.ComputeDiff(prev, next)
 
 	return next, nil
+}
+
+// TerritoryGroupEU is the TRUST_TERRITORIES group value that expands to
+// every territory the verified LOTL publishes an XML trusted-list pointer
+// for. Expansion happens per cycle, from the freshly verified LOTL — never
+// from a hardcoded list — so membership changes flow in on the LOTL's own
+// clock. It cannot collide with a country code: EU is the LOTL's own
+// self-pointer territory, which the expansion excludes.
+const TerritoryGroupEU = "EU"
+
+// expandTerritories resolves the configured territory list against the
+// verified LOTL: the EU group expands to the LOTL's pointer territories,
+// explicit codes pass through, duplicates collapse. A code the LOTL has no
+// pointer for stays in the set and fails its ingest visibly (a failed entry)
+// rather than being dropped here — configured intent is never silently
+// narrowed.
+func expandTerritories(configured []string, lotl *tsl.TrustedList) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(code string) {
+		if _, ok := seen[code]; ok {
+			return
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	for _, code := range configured {
+		if code == TerritoryGroupEU {
+			for _, t := range lotl.Territories() {
+				add(t)
+			}
+			continue
+		}
+		add(code)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // applyDeclaredSources loads the operator-declared anchor source — the

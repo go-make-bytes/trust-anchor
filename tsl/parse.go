@@ -6,6 +6,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"regexp"
+	"sort"
 )
 
 var b64WhiteSpace = regexp.MustCompile(`\s+`)
@@ -55,6 +56,32 @@ func (tl *TrustedList) PointerFor(territory string) (*TSLPointer, error) {
 		}
 	}
 	return nil, fmt.Errorf("tsl: no XML trusted-list pointer for territory %q", territory)
+}
+
+// Territories returns the territory codes this list publishes XML
+// trusted-list pointers for, the list's own self-pointer excluded — for the
+// LOTL, that is every country whose trusted list it vouches for. Sorted,
+// de-duplicated. Note the codes are the publisher's own (Greece is EL).
+func (tl *TrustedList) Territories() []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for i := range tl.SchemeInformation.PointersToOtherTSL {
+		p := &tl.SchemeInformation.PointersToOtherTSL[i]
+		if p.MimeType() != MimeTypeTSLXML || p.TSLType() == TSLTypeEUListOfTheLists {
+			continue
+		}
+		code := p.Territory()
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SelfPointer returns the LOTL's pointer to itself (TSLType EUlistofthelists),

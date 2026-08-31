@@ -294,7 +294,7 @@ Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METR
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists location |
 | `LOTL_BOOTSTRAP_CERTS_PATH` | baked `/etc/trust-anchor/lotl-signers.yaml` | Operator-pinned LOTL signer set — the first-install seed (a `lotl-signers.yaml` manifest carrying its own OJ reference, or a PEM/DER file/dir). The image bakes a default; after first install the persisted store is authoritative and this path is ignored |
-| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest (comma-separated) |
+| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | Accepted service statuses (short names or full TS 119 612 URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence; the earliest TL `NextUpdate` is honoured too |
 | `TRUST_ACTIVATION_MODE` | `auto` | `auto` \| `hold` (additions held for operator approval) |
