@@ -275,7 +275,7 @@ func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.
 
 // ingestLOTL fetches and verifies the LOTL, processing the pivot chain when
 // the current signer set no longer verifies it directly. Beyond signature
-// verification it enforces two TS 119 615 §4.1.4 authentication rules: an
+// verification it enforces two [ETSI TS 119 615 V1.4.1 §4.1.4] rules: an
 // expired LOTL is refused (PRO-4.1.4-13, LOTL_NEXTUPDATE_PASSED), and on
 // direct verification the LOTL's signing certificate must be in the LOTL's
 // own EU self-pointer set (PRO-4.1.4-10(a)) — a publication-consistency
