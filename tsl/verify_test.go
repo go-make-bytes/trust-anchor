@@ -74,7 +74,7 @@ func TestVerifyPivotChain(t *testing.T) {
 		if err != nil {
 			t.Fatalf("pre-parse %s: %v", next, err)
 		}
-		verified, err := VerifyAt(raw, signers, pre.SchemeInformation.ListIssueDateTime)
+		verified, _, err := VerifyAt(raw, signers, pre.SchemeInformation.ListIssueDateTime)
 		if err != nil {
 			t.Fatalf("verify %s: %v", next, err)
 		}
@@ -154,7 +154,7 @@ func TestVerifyRejectsTamperedContent(t *testing.T) {
 	if bytes.Equal(raw, tampered) {
 		t.Fatal("tampering had no effect — marker not found")
 	}
-	if _, err := Verify(tampered, signers); err == nil {
+	if _, _, err := Verify(tampered, signers); err == nil {
 		t.Fatal("tampered TL verified successfully — MUST fail")
 	}
 }
@@ -174,7 +174,7 @@ func TestVerifyRejectsUnexpectedSigner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Verify(readFixture(t, "ee-tsl.xml"), lvSigners); err == nil {
+	if _, _, err := Verify(readFixture(t, "ee-tsl.xml"), lvSigners); err == nil {
 		t.Fatal("EE TL verified against LV signer certs — MUST fail")
 	}
 }

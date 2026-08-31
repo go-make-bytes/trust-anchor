@@ -33,6 +33,18 @@ written for whoever runs the service or integrates against it.
 
 ### Changed
 
+- **LOTL authentication is stricter — two ETSI TS 119 615 §4.1.4 rules now enforced.** An
+  **expired LOTL is refused** (PRO-4.1.4-13): when the LOTL's own `NextUpdate` has passed, the
+  cycle fails with `LOTL_NEXTUPDATE_PASSED` and the previous snapshot stays served — national TLs
+  keep their standard-mandated softer posture (staleness is a warning + carry-over). And **signer
+  self-consistency is checked** (PRO-4.1.4-10(a)/-11(g)): the LOTL's signing certificate must be
+  in the LOTL's own EU self-pointer set (on direct verification), and each pivot's signing
+  certificate in that pivot's own set — refusals name
+  `LOTL_SIGNER_CERT_NOT_AUTHENTICATED_BY_LOTL` / `PIVOT_SIGNER_CERT_NOT_AUTHENTICATED_BY_PIVOT`.
+  Nothing changes for a healthy upstream (the real published chain passes both checks); a
+  publication mistake upstream now fails loudly instead of being ingested. No API or
+  configuration change.
+
 - **One broken national trusted list no longer blocks every other territory.** Until now, a
   territory failing with no previous data to fall back on aborted the whole ingestion cycle — on a
   fresh install or after adding a territory, one unreachable list meant *nothing* was ingested.

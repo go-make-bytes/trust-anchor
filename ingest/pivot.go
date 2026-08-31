@@ -69,7 +69,7 @@ func (p *Pipeline) walkPivots(ctx context.Context, refs []pivotRef, signers []*x
 		if err != nil {
 			return nil, 0, fmt.Errorf("pivot %d: pre-parse: %w", ref.seq, err)
 		}
-		verified, err := tsl.VerifyAt(raw, signers, pre.SchemeInformation.ListIssueDateTime)
+		verified, pivotSigner, err := tsl.VerifyAt(raw, signers, pre.SchemeInformation.ListIssueDateTime)
 		if err != nil {
 			return nil, 0, fmt.Errorf("pivot %d: %w", ref.seq, err)
 		}
@@ -100,6 +100,14 @@ func (p *Pipeline) walkPivots(ctx context.Context, refs []pivotRef, signers []*x
 		}
 		if len(next) == 0 {
 			return nil, 0, fmt.Errorf("pivot %d: empty signer set", ref.seq)
+		}
+		// Self-consistency (TS 119 615 PRO-4.1.4-11(g)): the certificate that
+		// signed this pivot must be among the certificates the pivot's own EU
+		// self-pointer advertises — the chain of trust to the previous set is
+		// already established by the verification above; this catches an
+		// upstream publication mistake.
+		if !certInSet(pivotSigner, next) {
+			return nil, 0, fmt.Errorf("pivot %d: PIVOT_SIGNER_CERT_NOT_AUTHENTICATED_BY_PIVOT: the pivot's signing certificate (%s) is not in the pivot's own EU self-pointer set", ref.seq, pivotSigner.Subject.CommonName)
 		}
 
 		signers = next

@@ -521,6 +521,16 @@ not omissions — recorded here so they are not rediscovered as defects.
 - **National-TL staleness is a warning, not a failure** — the same posture the standard itself
   takes for TLs past `NextUpdate` (`[ETSI TS 119 615 V1.4.1 §4.2.4]` PRO-4.2.4-10). The
   configurable grace window and the fail-safe carry-over are documented extensions on top.
+- **The LOTL, by contrast, hard-fails when expired** (`[ETSI TS 119 615 V1.4.1 §4.1.4]`
+  PRO-4.1.4-13, `LOTL_NEXTUPDATE_PASSED`): a LOTL past its own `NextUpdate` no longer
+  authenticates — the cycle fails and the previous snapshot stays served. The asymmetry with the
+  national-TL warning above is the standard's own.
+- **Signer self-consistency is enforced** (`[ETSI TS 119 615 V1.4.1 §4.1.4]` PRO-4.1.4-10(a) /
+  PRO-4.1.4-11(g)): on direct verification the LOTL's signing certificate must be in the LOTL's
+  own EU self-pointer set, and every processed pivot's signing certificate must be in that
+  pivot's own set — publication-consistency checks on top of the pinned chain of trust. After a
+  pivot walk the LOTL-level property holds by construction: the re-verification pins the LOTL's
+  signer into the newest pivot's set, which is the standard's n>0 requirement.
 
 ---
 

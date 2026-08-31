@@ -3,7 +3,13 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -125,6 +131,13 @@ func fixtureBootstrap(t *testing.T, pivotFile string) *trust.Bootstrap {
 	return b
 }
 
+// testClock is the pinned cycle time for fixture-driven pipeline tests: a
+// date at which every recorded list is within its NextUpdate (the recorded
+// LOTL's is 2026-11-18). Without the pin, the expired-LOTL check
+// (PRO-4.1.4-13) would make the whole fixture suite start failing the day
+// the wall clock passes the fixture's NextUpdate.
+var testClock = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
 func testPipeline(t *testing.T, ft *fixtureTransport, mode string) *Pipeline {
 	t.Helper()
 	fetcher := NewFetcher(10*time.Second, 20*1024*1024)
@@ -137,7 +150,9 @@ func testPipeline(t *testing.T, ft *fixtureTransport, mode string) *Pipeline {
 		HoldAutoRelease:  72 * time.Hour,
 		StaleGrace:       24 * time.Hour,
 	}
-	return NewPipeline(cfg, fetcher, events.New(zap.NewNop()), zap.NewNop())
+	p := NewPipeline(cfg, fetcher, events.New(zap.NewNop()), zap.NewNop())
+	p.clock = func() time.Time { return testClock }
+	return p
 }
 
 func TestRefreshFullCycle(t *testing.T) {
@@ -459,6 +474,97 @@ func TestRefreshEUGroupDedupesAndKeepsExplicitCodes(t *testing.T) {
 	}
 }
 
+// TestRefreshRejectsExpiredLOTL: an expired LOTL no longer authenticates
+// (TS 119 615 PRO-4.1.4-13) — the cycle fails with the named reason and the
+// caller keeps serving the previous snapshot. The same fixture accepted an
+// hour before its NextUpdate pins the boundary.
+func TestRefreshRejectsExpiredLOTL(t *testing.T) {
+	pre, err := tsl.Parse(readTestdata(t, "eu-lotl.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nu := pre.SchemeInformation.NextUpdate.DateTime
+	if nu == nil {
+		t.Fatal("fixture LOTL has no NextUpdate")
+	}
+
+	p := testPipeline(t, newFixtureTransport(), ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	p.clock = func() time.Time { return nu.Add(-time.Hour) }
+	if _, err := p.Refresh(context.Background(), nil, boot); err != nil {
+		t.Fatalf("unexpired LOTL refused: %v", err)
+	}
+
+	p.clock = func() time.Time { return nu.Add(time.Hour) }
+	_, err = p.Refresh(context.Background(), nil, boot)
+	if err == nil {
+		t.Fatal("an expired LOTL still authenticated")
+	}
+	if !strings.Contains(err.Error(), "LOTL_NEXTUPDATE_PASSED") {
+		t.Fatalf("expiry refusal does not carry the named reason: %v", err)
+	}
+}
+
+// TestLOTLSignerSelfConsistency: the certificate that signed the LOTL must
+// be in the LOTL's own EU self-pointer set (TS 119 615 PRO-4.1.4-10(a)). The
+// real fixture is self-consistent (positive leg proves the extracted signer
+// is the true one); a foreign certificate fails with the named reason.
+func TestLOTLSignerSelfConsistency(t *testing.T) {
+	raw := readTestdata(t, "eu-lotl.xml")
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+	signers, err := boot.Certificates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, signer, err := tsl.Verify(raw, signers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lotl, err := tsl.Parse(verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := lotlSignerSelfConsistent(signer, lotl); err != nil {
+		t.Fatalf("the real LOTL read as self-inconsistent: %v", err)
+	}
+
+	foreign := testCertificate(t, "not-the-lotl-signer")
+	err = lotlSignerSelfConsistent(foreign, lotl)
+	if err == nil {
+		t.Fatal("a foreign signer passed the self-consistency check")
+	}
+	if !strings.Contains(err.Error(), "LOTL_SIGNER_CERT_NOT_AUTHENTICATED_BY_LOTL") {
+		t.Fatalf("refusal does not carry the named reason: %v", err)
+	}
+}
+
+// testCertificate generates a throwaway self-signed certificate — a signer
+// that is deliberately NOT in any fixture's pointer sets.
+func testCertificate(t *testing.T, cn string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
 // TestRefreshHTTPTerritoryOptIn: a territory named in AllowHTTPTerritories
 // may be fetched over its published plain-http pointer (SK's real shape) —
 // the list still passes the same XMLDSig verification against the
@@ -618,7 +724,7 @@ func TestRefreshHoldMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aged.Pending[0].FirstSeen = time.Now().Add(-100 * time.Hour)
+	aged.Pending[0].FirstSeen = testClock.Add(-100 * time.Hour)
 	released, err := p.Refresh(context.Background(), aged, boot)
 	if err != nil {
 		t.Fatal(err)

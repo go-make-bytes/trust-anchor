@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
@@ -70,11 +71,23 @@ type Pipeline struct {
 	fetcher *Fetcher
 	events  *events.Emitter
 	log     *zap.Logger
+
+	// clock supplies the cycle's wall time; nil means time.Now. Injected by
+	// tests that need to move the clock past a fixture's NextUpdate.
+	clock func() time.Time
 }
 
 // NewPipeline builds a Pipeline.
 func NewPipeline(cfg Config, fetcher *Fetcher, ev *events.Emitter, log *zap.Logger) *Pipeline {
 	return &Pipeline{cfg: cfg, fetcher: fetcher, events: ev, log: log}
+}
+
+// now returns the cycle wall time (the injected clock in tests).
+func (p *Pipeline) now() time.Time {
+	if p.clock != nil {
+		return p.clock().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func logUint(k string, v uint64) zap.Field { return zap.Uint64(k, v) }
@@ -93,9 +106,9 @@ func sha256hex(b []byte) string {
 // error and the caller keeps serving prev (fail-safe). Per-territory failures
 // carry the previous territory data over instead of failing the cycle.
 func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error) {
-	now := time.Now().UTC()
+	now := p.now()
 
-	lotl, signers, pivotSeq, err := p.ingestLOTL(ctx, prev, boot)
+	lotl, signers, pivotSeq, err := p.ingestLOTL(ctx, prev, boot, now)
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +274,15 @@ func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.
 }
 
 // ingestLOTL fetches and verifies the LOTL, processing the pivot chain when
-// the current signer set no longer verifies it directly.
-func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*tsl.TrustedList, []*x509.Certificate, uint64, error) {
+// the current signer set no longer verifies it directly. Beyond signature
+// verification it enforces two TS 119 615 §4.1.4 authentication rules: an
+// expired LOTL is refused (PRO-4.1.4-13, LOTL_NEXTUPDATE_PASSED), and on
+// direct verification the LOTL's signing certificate must be in the LOTL's
+// own EU self-pointer set (PRO-4.1.4-10(a)) — a publication-consistency
+// check. After a pivot walk that same property is enforced by construction:
+// the re-verification pins the LOTL's signer into the newest pivot's set,
+// which is the standard's n>0 requirement.
+func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap, now time.Time) (*tsl.TrustedList, []*x509.Certificate, uint64, error) {
 	if err := p.fetcher.AllowURL(p.cfg.LOTLURL); err != nil {
 		return nil, nil, 0, err
 	}
@@ -299,8 +319,10 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 		return nil, nil, 0, err
 	}
 
-	verified, verr := tsl.Verify(raw, signers)
+	direct := false
+	verified, lotlSigner, verr := tsl.Verify(raw, signers)
 	if verr == nil {
+		direct = true
 		// The current set supersedes any unprocessed pivots — they are
 		// historical rotations that ended in this set.
 		if maxPivot > pivotSeq {
@@ -314,7 +336,7 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("ingest: pivot chain: %w (after direct verification failed: %w)", err, verr)
 		}
-		verified, err = tsl.Verify(raw, signers)
+		verified, lotlSigner, err = tsl.Verify(raw, signers)
 		if err != nil {
 			return nil, nil, 0, fmt.Errorf("ingest: LOTL verification failed after pivot processing: %w", err)
 		}
@@ -327,7 +349,55 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 	if lotl.SchemeInformation.TSLType != tsl.TSLTypeEUListOfTheLists {
 		return nil, nil, 0, fmt.Errorf("ingest: LOTL has unexpected TSLType %q", lotl.SchemeInformation.TSLType)
 	}
+
+	// An expired LOTL no longer authenticates — the publisher's own validity
+	// promise has run out (TS 119 615 PRO-4.1.4-13). Cycle failure: the
+	// previous snapshot stays served. Deliberately asymmetric with national
+	// TLs, whose staleness is a warning by the standard's own rule
+	// (PRO-4.2.4-10) and stays the carry-over + trust.stale posture.
+	if nu := lotl.SchemeInformation.NextUpdate.DateTime; nu != nil && now.After(*nu) {
+		return nil, nil, 0, fmt.Errorf("ingest: LOTL_NEXTUPDATE_PASSED: the LOTL's NextUpdate %s has passed — refusing to authenticate an expired list", nu.Format(time.RFC3339))
+	}
+
+	// On direct verification the LOTL's signing certificate must be in the
+	// LOTL's own EU self-pointer set (PRO-4.1.4-10(a)) — it catches an
+	// upstream publication mistake where the list is signed by a key its own
+	// content does not advertise.
+	if direct {
+		if err := lotlSignerSelfConsistent(lotlSigner, lotl); err != nil {
+			return nil, nil, 0, err
+		}
+	}
 	return lotl, signers, pivotSeq, nil
+}
+
+// lotlSignerSelfConsistent checks TS 119 615 PRO-4.1.4-10(a): the certificate
+// that signed the LOTL is among the certificates the LOTL's own EU
+// self-pointer advertises.
+func lotlSignerSelfConsistent(signer *x509.Certificate, lotl *tsl.TrustedList) error {
+	self, err := lotl.SelfPointer()
+	if err != nil {
+		return fmt.Errorf("ingest: LOTL self-consistency: %w", err)
+	}
+	own, err := self.Certificates()
+	if err != nil {
+		return fmt.Errorf("ingest: LOTL self-consistency: %w", err)
+	}
+	if !certInSet(signer, own) {
+		return fmt.Errorf("ingest: LOTL_SIGNER_CERT_NOT_AUTHENTICATED_BY_LOTL: the LOTL's signing certificate (%s) is not in the LOTL's own EU self-pointer set", signer.Subject.CommonName)
+	}
+	return nil
+}
+
+// certInSet reports byte-identical membership (the same pinning rule
+// signature verification uses — no chain building).
+func certInSet(c *x509.Certificate, set []*x509.Certificate) bool {
+	for _, s := range set {
+		if bytes.Equal(s.Raw, c.Raw) {
+			return true
+		}
+	}
+	return false
 }
 
 // ingestTerritory fetches, verifies and extracts one national TL. On failure
