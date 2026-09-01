@@ -37,6 +37,8 @@ type TerritorySummary struct {
 	Stale             bool       `json:"stale"`
 	CarriedOver       bool       `json:"carriedOver,omitempty"`
 	CarriedOverReason string     `json:"carriedOverReason,omitempty"`
+	Failed            bool       `json:"failed,omitempty"`
+	FailureReason     string     `json:"failureReason,omitempty"`
 	AnchorCount       int        `json:"anchorCount"`
 }
 
@@ -90,6 +92,8 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 			Stale:             t.StaleAt(now, grace),
 			CarriedOver:       t.CarriedOver,
 			CarriedOverReason: t.CarriedOverReason,
+			Failed:            t.Failed,
+			FailureReason:     t.FailureReason,
 			AnchorCount:       len(t.Anchors),
 		})
 	}
@@ -105,10 +109,69 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 	return out
 }
 
-// Refresh is the /v1/refresh response.
+// RefreshDeclared reports the operator-declared half of a refresh: whether
+// the declared set changed what is served, and whether its load failed (the
+// previous set carried over) with the load error.
+type RefreshDeclared struct {
+	Changed     bool   `json:"changed"`
+	CarriedOver bool   `json:"carriedOver,omitempty"`
+	Error       string `json:"error,omitempty"`
+}
+
+// RefreshTerritories summarizes the per-territory outcomes of a completed
+// ingestion cycle.
+type RefreshTerritories struct {
+	OK          int      `json:"ok"`
+	Failed      []string `json:"failed,omitempty"`
+	CarriedOver []string `json:"carriedOver,omitempty"`
+}
+
+// RefreshCycle reports the upstream half of a refresh. Territories is
+// present only when the cycle completed — a failed cycle produced no
+// per-territory outcomes of its own.
+type RefreshCycle struct {
+	OK          bool                `json:"ok"`
+	Error       string              `json:"error,omitempty"`
+	Territories *RefreshTerritories `json:"territories,omitempty"`
+}
+
+// Refresh is the /v1/refresh response: the two halves of the trigger
+// reported separately, so neither outcome can hide the other. Snapshot is
+// always the id being served as the route answers.
 type Refresh struct {
-	Snapshot string `json:"snapshot"`
-	Changed  bool   `json:"changed"`
+	Snapshot string          `json:"snapshot"`
+	Changed  bool            `json:"changed"`
+	Declared RefreshDeclared `json:"declared"`
+	Cycle    RefreshCycle    `json:"cycle"`
+}
+
+// NewRefresh builds the refresh report. served is the snapshot being served
+// as the response is written; cycleErr nil means the cycle completed and the
+// per-territory summary is drawn from served.
+func NewRefresh(served *trust.Snapshot, changed, declaredChanged, declaredCarriedOver bool, declaredErr string, cycleErr error) *Refresh {
+	out := &Refresh{
+		Snapshot: served.ID,
+		Changed:  changed,
+		Declared: RefreshDeclared{Changed: declaredChanged, CarriedOver: declaredCarriedOver, Error: declaredErr},
+		Cycle:    RefreshCycle{OK: cycleErr == nil},
+	}
+	if cycleErr != nil {
+		out.Cycle.Error = cycleErr.Error()
+		return out
+	}
+	terr := &RefreshTerritories{}
+	for _, t := range served.Territories {
+		switch {
+		case t.Failed:
+			terr.Failed = append(terr.Failed, t.Code)
+		case t.CarriedOver:
+			terr.CarriedOver = append(terr.CarriedOver, t.Code)
+		default:
+			terr.OK++
+		}
+	}
+	out.Cycle.Territories = terr
+	return out
 }
 
 // Approved is the pending-anchor approval endpoint's response.

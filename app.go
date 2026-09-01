@@ -112,6 +112,7 @@ func (a *App) init() error {
 	pipeline := ingest.NewPipeline(ingest.Config{
 		LOTLURL:              cfg.LOTLURL,
 		Territories:          cfg.Territories(),
+		AllowHTTPTerritories: cfg.AllowHTTPTerritories(),
 		AcceptedStatuses:     cfg.AcceptedStatuses(),
 		AcceptedServiceTypes: cfg.AcceptedServiceTypes(),
 		ActivationMode:       cfg.ActivationMode,

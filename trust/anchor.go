@@ -123,6 +123,14 @@ type Territory struct {
 	CarriedOver       bool   `json:"carriedOver,omitempty"`
 	CarriedOverReason string `json:"carriedOverReason,omitempty"`
 
+	// Failed marks a territory whose list could not be fetched or verified
+	// and that has no previous data to carry over (a fresh install, or a
+	// newly configured territory). The entry holds no anchors and no trust
+	// content — it exists so a served snapshot names every configured
+	// territory, and a broken one is visible instead of silently absent.
+	Failed        bool   `json:"failed,omitempty"`
+	FailureReason string `json:"failureReason,omitempty"`
+
 	Anchors []Anchor `json:"anchors"`
 }
 
@@ -300,6 +308,14 @@ type idAnchor struct {
 func (s *Snapshot) ComputeID() string {
 	content := idContent{LOTLSequence: s.LOTLSequence}
 	for _, t := range s.Territories {
+		if t.Failed {
+			// A failed territory contributes no trust content. Its health is
+			// a process outcome, not content — the same rule that keeps
+			// CarriedOver and SourceDigest out of the identity — so an ID
+			// (and every consumer's ETag) must not move when a territory
+			// merely flips between failed and healthy-with-the-same-anchors.
+			continue
+		}
 		it := idTerritory{Code: t.Code, TLSequence: t.TLSequence}
 		for _, a := range t.Anchors {
 			it.Anchors = append(it.Anchors, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})

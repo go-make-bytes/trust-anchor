@@ -3,7 +3,13 @@ package ingest
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -23,6 +29,8 @@ const (
 	lotlURL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 	lvURL   = "https://trustlist.gov.lv/tsl/latvian-tsl.xml"
 	eeURL   = "https://sr.riik.ee/tsl/estonian-tsl.xml"
+	// The LOTL's SK pointer is plain http — the real published location.
+	skURL = "http://tl.nbu.gov.sk/kca/tsl/tsl.xml"
 )
 
 // fixtureTransport serves recorded fixtures for the real URLs — the pipeline
@@ -40,6 +48,7 @@ func newFixtureTransport() *fixtureTransport {
 			lotlURL: "eu-lotl.xml",
 			lvURL:   "lv-tsl.xml",
 			eeURL:   "ee-tsl.xml",
+			skURL:   "sk-tsl.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-282.xml": "eu-lotl-pivot-282.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-300.xml": "eu-lotl-pivot-300.xml",
 			"https://ec.europa.eu/tools/lotl/eu-lotl-pivot-335.xml": "eu-lotl-pivot-335.xml",
@@ -122,6 +131,13 @@ func fixtureBootstrap(t *testing.T, pivotFile string) *trust.Bootstrap {
 	return b
 }
 
+// testClock is the pinned cycle time for fixture-driven pipeline tests: a
+// date at which every recorded list is within its NextUpdate (the recorded
+// LOTL's is 2026-11-18). Without the pin, the expired-LOTL check
+// (PRO-4.1.4-13) would make the whole fixture suite start failing the day
+// the wall clock passes the fixture's NextUpdate.
+var testClock = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
 func testPipeline(t *testing.T, ft *fixtureTransport, mode string) *Pipeline {
 	t.Helper()
 	fetcher := NewFetcher(10*time.Second, 20*1024*1024)
@@ -134,7 +150,9 @@ func testPipeline(t *testing.T, ft *fixtureTransport, mode string) *Pipeline {
 		HoldAutoRelease:  72 * time.Hour,
 		StaleGrace:       24 * time.Hour,
 	}
-	return NewPipeline(cfg, fetcher, events.New(zap.NewNop()), zap.NewNop())
+	p := NewPipeline(cfg, fetcher, events.New(zap.NewNop()), zap.NewNop())
+	p.clock = func() time.Time { return testClock }
+	return p
 }
 
 func TestRefreshFullCycle(t *testing.T) {
@@ -270,16 +288,366 @@ func TestRefreshFailsWhenLOTLUnavailableAndNoPrev(t *testing.T) {
 	}
 }
 
-func TestRefreshFailsOnFirstRunTerritoryError(t *testing.T) {
+// TestRefreshPartialFirstSnapshot: a territory failing with no previous data
+// is recorded as a failed entry and the rest of the cycle completes — the
+// healthy territories are served, the broken one is named.
+func TestRefreshPartialFirstSnapshot(t *testing.T) {
 	ft := newFixtureTransport()
 	ft.status[lvURL] = 500
 	p := testPipeline(t, ft, ModeAuto)
 	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
 
-	// No previous data to fall back on — a partial first snapshot must never
-	// be produced.
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatalf("one broken territory failed the whole first cycle: %v", err)
+	}
+
+	lv := snap.Territory("LV")
+	if lv == nil {
+		t.Fatal("failed territory missing from the snapshot entirely")
+	}
+	if !lv.Failed || lv.FailureReason == "" {
+		t.Fatalf("LV not recorded as failed: %+v", lv)
+	}
+	if len(lv.Anchors) != 0 || lv.CarriedOver {
+		t.Fatalf("failed territory carries data: %+v", lv)
+	}
+	ee := snap.Territory("EE")
+	if ee == nil || ee.Failed || len(ee.Anchors) != 11 {
+		t.Fatalf("healthy territory suppressed by the broken one: %+v", ee)
+	}
+}
+
+// TestRefreshAllTerritoriesFailedFirstRunFails: the floor — when every
+// configured territory failed and nothing has data, no snapshot forms.
+func TestRefreshAllTerritoriesFailedFirstRunFails(t *testing.T) {
+	ft := newFixtureTransport()
+	ft.status[lvURL] = 500
+	ft.status[eeURL] = 500
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
 	if _, err := p.Refresh(context.Background(), nil, boot); err == nil {
-		t.Fatal("cycle produced a partial first snapshot")
+		t.Fatal("cycle produced a snapshot with zero verified territories")
+	}
+}
+
+// TestRefreshAllTerritoriesCarriedOverStillSucceeds pins the floor's
+// boundary: with previous data everywhere, an all-territories outage is a
+// carry-over cycle, not a floor failure (serving slightly old data beats
+// serving nothing).
+func TestRefreshAllTerritoriesCarriedOverStillSucceeds(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	good, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ft.status[lvURL] = 500
+	ft.status[eeURL] = 500
+	snap, err := p.Refresh(context.Background(), good, boot)
+	if err != nil {
+		t.Fatalf("all-carry-over cycle failed: %v", err)
+	}
+	for _, code := range []string{"LV", "EE"} {
+		tr := snap.Territory(code)
+		if tr == nil || !tr.CarriedOver || tr.Failed {
+			t.Fatalf("%s not carried over: %+v", code, tr)
+		}
+	}
+}
+
+// TestRefreshFailedTerritoryStaysFailedThenRecovers: a failed entry is not
+// "previous data" — while the upstream stays broken the territory stays a
+// failed entry (never a carry-over of nothing), and the snapshot id does not
+// move; when the upstream heals, the territory ingests normally.
+func TestRefreshFailedTerritoryStaysFailedThenRecovers(t *testing.T) {
+	ft := newFixtureTransport()
+	ft.status[lvURL] = 500
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	first, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := p.Refresh(context.Background(), first, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lv := second.Territory("LV")
+	if lv == nil || !lv.Failed || lv.CarriedOver || len(lv.Anchors) != 0 {
+		t.Fatalf("still-broken territory not a failed entry: %+v", lv)
+	}
+	if second.ID != first.ID {
+		t.Error("snapshot id moved on an unchanged failed territory")
+	}
+
+	delete(ft.status, lvURL)
+	healed, err := p.Refresh(context.Background(), second, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lv = healed.Territory("LV")
+	if lv == nil || lv.Failed || len(lv.Anchors) != 5 {
+		t.Fatalf("healed territory did not ingest: %+v", lv)
+	}
+	if healed.ID == second.ID {
+		t.Error("snapshot id unchanged after a territory gained anchors")
+	}
+}
+
+// TestRefreshEUTerritoryGroup: TRUST_TERRITORIES=EU expands, per cycle, to
+// every territory the verified LOTL publishes an XML pointer for. The
+// fixtures serve only LV and EE, so those two ingest and every other
+// expanded territory becomes a named failed entry — the expansion and the
+// tolerance proven together.
+func TestRefreshEUTerritoryGroup(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"EU"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The recorded LOTL publishes 31 territories (pinned in the tsl package).
+	if len(snap.Territories) != 31 {
+		t.Fatalf("territories = %d, want 31", len(snap.Territories))
+	}
+	healthy := 0
+	for _, tr := range snap.Territories {
+		if !tr.Failed {
+			healthy++
+		}
+	}
+	if healthy != 2 {
+		t.Fatalf("healthy territories = %d, want 2 (LV, EE — the fixtures)", healthy)
+	}
+	if lv := snap.Territory("LV"); lv == nil || lv.Failed || len(lv.Anchors) != 5 {
+		t.Fatalf("LV not ingested under the EU group: %+v", lv)
+	}
+	if de := snap.Territory("DE"); de == nil || !de.Failed {
+		t.Fatalf("DE not a failed entry under the EU group: %+v", de)
+	}
+	if el := snap.Territory("EL"); el == nil {
+		t.Fatal("EL (Greece's publisher code) missing from the expansion")
+	}
+	if snap.Territory("EU") != nil {
+		t.Fatal("the LOTL self-pointer leaked into the territory set")
+	}
+}
+
+// TestRefreshEUGroupDedupesAndKeepsExplicitCodes: explicit codes combine with
+// the group without duplication, and a code the LOTL has no pointer for (UA)
+// is a named failed entry rather than an error — it starts working the day
+// its declared source exists.
+func TestRefreshEUGroupDedupesAndKeepsExplicitCodes(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"EU", "LV", "UA"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Territories) != 32 {
+		t.Fatalf("territories = %d, want 32 (31 from the LOTL + UA)", len(snap.Territories))
+	}
+	seen := map[string]int{}
+	for _, tr := range snap.Territories {
+		seen[tr.Code]++
+	}
+	if seen["LV"] != 1 {
+		t.Fatalf("LV appears %d times, want 1 (dedupe)", seen["LV"])
+	}
+	ua := snap.Territory("UA")
+	if ua == nil || !ua.Failed || !strings.Contains(ua.FailureReason, "no XML trusted-list pointer") {
+		t.Fatalf("UA not a named failed entry: %+v", ua)
+	}
+}
+
+// TestRefreshRejectsExpiredLOTL: an expired LOTL no longer authenticates
+// (TS 119 615 PRO-4.1.4-13) — the cycle fails with the named reason and the
+// caller keeps serving the previous snapshot. The same fixture accepted an
+// hour before its NextUpdate pins the boundary.
+func TestRefreshRejectsExpiredLOTL(t *testing.T) {
+	pre, err := tsl.Parse(readTestdata(t, "eu-lotl.xml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	nu := pre.SchemeInformation.NextUpdate.DateTime
+	if nu == nil {
+		t.Fatal("fixture LOTL has no NextUpdate")
+	}
+
+	p := testPipeline(t, newFixtureTransport(), ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	p.clock = func() time.Time { return nu.Add(-time.Hour) }
+	if _, err := p.Refresh(context.Background(), nil, boot); err != nil {
+		t.Fatalf("unexpired LOTL refused: %v", err)
+	}
+
+	p.clock = func() time.Time { return nu.Add(time.Hour) }
+	_, err = p.Refresh(context.Background(), nil, boot)
+	if err == nil {
+		t.Fatal("an expired LOTL still authenticated")
+	}
+	if !strings.Contains(err.Error(), "LOTL_NEXTUPDATE_PASSED") {
+		t.Fatalf("expiry refusal does not carry the named reason: %v", err)
+	}
+}
+
+// TestLOTLSignerSelfConsistency: the certificate that signed the LOTL must
+// be in the LOTL's own EU self-pointer set (TS 119 615 PRO-4.1.4-10(a)). The
+// real fixture is self-consistent (positive leg proves the extracted signer
+// is the true one); a foreign certificate fails with the named reason.
+func TestLOTLSignerSelfConsistency(t *testing.T) {
+	raw := readTestdata(t, "eu-lotl.xml")
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+	signers, err := boot.Certificates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, signer, err := tsl.Verify(raw, signers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lotl, err := tsl.Parse(verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := lotlSignerSelfConsistent(signer, lotl); err != nil {
+		t.Fatalf("the real LOTL read as self-inconsistent: %v", err)
+	}
+
+	foreign := testCertificate(t, "not-the-lotl-signer")
+	err = lotlSignerSelfConsistent(foreign, lotl)
+	if err == nil {
+		t.Fatal("a foreign signer passed the self-consistency check")
+	}
+	if !strings.Contains(err.Error(), "LOTL_SIGNER_CERT_NOT_AUTHENTICATED_BY_LOTL") {
+		t.Fatalf("refusal does not carry the named reason: %v", err)
+	}
+}
+
+// testCertificate generates a throwaway self-signed certificate — a signer
+// that is deliberately NOT in any fixture's pointer sets.
+func testCertificate(t *testing.T, cn string) *x509.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// TestRefreshHTTPTerritoryOptIn: a territory named in AllowHTTPTerritories
+// may be fetched over its published plain-http pointer (SK's real shape) —
+// the list still passes the same XMLDSig verification against the
+// LOTL-pinned signers, which is where integrity actually comes from.
+func TestRefreshHTTPTerritoryOptIn(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"LV", "SK"}
+	p.cfg.AllowHTTPTerritories = []string{"SK"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := snap.Territory("SK")
+	if sk == nil || sk.Failed {
+		t.Fatalf("opted-in http territory did not ingest: %+v", sk)
+	}
+	if len(sk.Anchors) == 0 {
+		t.Fatal("SK ingested but extracted no anchors")
+	}
+}
+
+// TestRefreshHTTPBlockedWithoutOptIn pins the default: an http pointer for a
+// territory NOT named in the opt-in stays refused by the egress policy and
+// becomes a named failed entry.
+func TestRefreshHTTPBlockedWithoutOptIn(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.Territories = []string{"LV", "SK"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	snap, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk := snap.Territory("SK")
+	if sk == nil || !sk.Failed || !strings.Contains(sk.FailureReason, "not https") {
+		t.Fatalf("http territory without opt-in not refused: %+v", sk)
+	}
+	if lv := snap.Territory("LV"); lv == nil || lv.Failed {
+		t.Fatalf("LV suppressed: %+v", lv)
+	}
+}
+
+// TestRefreshLOTLNeverHTTP: the opt-in is per national territory and can
+// never make an http LOTL acceptable — nothing on the LOTL path registers a
+// plain-http host.
+func TestRefreshLOTLNeverHTTP(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	p.cfg.LOTLURL = "http://ec.europa.eu/tools/lotl/eu-lotl.xml"
+	p.cfg.AllowHTTPTerritories = []string{"LV", "EE", "SK", "EU"}
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	if _, err := p.Refresh(context.Background(), nil, boot); err == nil {
+		t.Fatal("an http LOTL was accepted")
+	}
+}
+
+// TestComputeIDExcludesFailedTerritories: a failed entry is a process
+// outcome, not trust content — the id of a snapshot with a failed territory
+// equals the id of the same snapshot without that entry.
+func TestComputeIDExcludesFailedTerritories(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	full, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withFailed, err := cloneSnapshot(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withFailed.Territories = append(withFailed.Territories, &trust.Territory{
+		Code: "DE", Failed: true, FailureReason: "unreachable", Anchors: []trust.Anchor{},
+	})
+	if withFailed.ComputeID() != full.ID {
+		t.Error("a failed territory entry moved the content id")
 	}
 }
 
@@ -356,7 +724,7 @@ func TestRefreshHoldMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	aged.Pending[0].FirstSeen = time.Now().Add(-100 * time.Hour)
+	aged.Pending[0].FirstSeen = testClock.Add(-100 * time.Hour)
 	released, err := p.Refresh(context.Background(), aged, boot)
 	if err != nil {
 		t.Fatal(err)

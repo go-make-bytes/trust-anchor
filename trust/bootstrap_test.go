@@ -63,7 +63,7 @@ func TestBakedManifestValidatesLOTL(t *testing.T) {
 		t.Fatalf("read LOTL fixture: %v", err)
 	}
 
-	if _, err := tsl.Verify(lotl, certs); err != nil {
+	if _, _, err := tsl.Verify(lotl, certs); err != nil {
 		t.Fatalf("baked signer set did not validate the LOTL: %v", err)
 	}
 }

@@ -78,8 +78,8 @@ func (t *RefreshTask) run(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	if _, _, err := t.manager.Refresh(ctx); err != nil {
-		t.log.Error("scheduled refresh failed", zap.Error(err))
+	if out := t.manager.Refresh(ctx); out.CycleErr != nil {
+		t.log.Error("scheduled refresh failed", zap.Error(out.CycleErr))
 	}
 }
 

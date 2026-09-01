@@ -2,6 +2,7 @@ package tsl
 
 import (
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"time"
 
@@ -54,7 +55,9 @@ type fixedClock struct{ t time.Time }
 func (c fixedClock) Now() time.Time { return c.t }
 
 // Verify validates the enveloped XMLDSig signature of raw against the pinned
-// signer certificates and returns the signature-verified document bytes.
+// signer certificates and returns the signature-verified document bytes plus
+// the signing certificate (the KeyInfo certificate the validation matched —
+// what TS 119 615 calls LOTLSO-Cert, needed for its self-consistency checks).
 //
 // The returned bytes are the exclusive-C14N form of the verified document
 // reference — downstream parsing must consume these, never raw, so that only
@@ -62,7 +65,7 @@ func (c fixedClock) Now() time.Time { return c.t }
 // must be byte-identical to one of signers (no chain building) and must be
 // within its validity period. All SignedInfo references are digest-checked,
 // including the XAdES SignedProperties reference.
-func Verify(raw []byte, signers []*x509.Certificate) ([]byte, error) {
+func Verify(raw []byte, signers []*x509.Certificate) ([]byte, *x509.Certificate, error) {
 	return verify(raw, signers, nil)
 }
 
@@ -72,36 +75,71 @@ func Verify(raw []byte, signers []*x509.Certificate) ([]byte, error) {
 // the correct check is validity at the pivot's issue time. Callers must take
 // `at` from the document itself (pre-parsed ListIssueDateTime) and re-check
 // the value against the verified content afterwards.
-func VerifyAt(raw []byte, signers []*x509.Certificate, at time.Time) ([]byte, error) {
+func VerifyAt(raw []byte, signers []*x509.Certificate, at time.Time) ([]byte, *x509.Certificate, error) {
 	return verify(raw, signers, &at)
 }
 
 // VerifyAndParse verifies raw against the pinned signers and parses the
 // verified content. This is the only entry point production ingestion uses.
 func VerifyAndParse(raw []byte, signers []*x509.Certificate) (*TrustedList, error) {
-	verified, err := Verify(raw, signers)
+	verified, _, err := Verify(raw, signers)
 	if err != nil {
 		return nil, err
 	}
 	return Parse(verified)
 }
 
-func verify(raw []byte, signers []*x509.Certificate, at *time.Time) ([]byte, error) {
+// signerCertificate extracts the signing certificate from the signature's
+// KeyInfo (the first dsig X509Certificate). The TS 119 612 profile carries
+// exactly the signing certificate there, and validation pins it byte-identical
+// against the expected set — so after a successful validation this is the
+// certificate that verified.
+func signerCertificate(sig *etree.Element) (*x509.Certificate, error) {
+	var certEl *etree.Element
+	var walk func(el *etree.Element)
+	walk = func(el *etree.Element) {
+		if certEl != nil {
+			return
+		}
+		if el.Tag == "X509Certificate" && resolveNamespace(el, el.Space) == dsigNamespace {
+			certEl = el
+			return
+		}
+		for _, c := range el.ChildElements() {
+			walk(c)
+		}
+	}
+	walk(sig)
+	if certEl == nil {
+		return nil, fmt.Errorf("tsl: signature carries no KeyInfo X509Certificate")
+	}
+	der, err := base64.StdEncoding.DecodeString(b64WhiteSpace.ReplaceAllString(certEl.Text(), ""))
+	if err != nil {
+		return nil, fmt.Errorf("tsl: decode KeyInfo certificate: %w", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("tsl: parse KeyInfo certificate: %w", err)
+	}
+	return cert, nil
+}
+
+func verify(raw []byte, signers []*x509.Certificate, at *time.Time) ([]byte, *x509.Certificate, error) {
 	if len(signers) == 0 {
-		return nil, fmt.Errorf("tsl: no expected signer certificates configured")
+		return nil, nil, fmt.Errorf("tsl: no expected signer certificates configured")
 	}
 
 	doc := etree.NewDocument()
 	if err := doc.ReadFromBytes(raw); err != nil {
-		return nil, fmt.Errorf("tsl: parse XML for signature verification: %w", err)
+		return nil, nil, fmt.Errorf("tsl: parse XML for signature verification: %w", err)
 	}
 	root := doc.Root()
 	if root == nil {
-		return nil, fmt.Errorf("tsl: document has no root element")
+		return nil, nil, fmt.Errorf("tsl: document has no root element")
 	}
 	sig, err := findEnvelopedSignature(root)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	ctx := xmldsig.NewDefaultValidationContext(&xmldsig.MemoryX509CertificateStore{Roots: signers})
@@ -117,7 +155,12 @@ func verify(raw []byte, signers []*x509.Certificate, at *time.Time) ([]byte, err
 	// internally, so neither argument is mutated.
 	validated, err := ctx.ValidateSignature(root, sig)
 	if err != nil {
-		return nil, fmt.Errorf("tsl: XML signature verification failed: %w", err)
+		return nil, nil, fmt.Errorf("tsl: XML signature verification failed: %w", err)
+	}
+
+	signer, err := signerCertificate(sig)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Validate returns one element per digest-checked reference; pick the
@@ -130,14 +173,14 @@ func verify(raw []byte, signers []*x509.Certificate, at *time.Time) ([]byte, err
 		}
 	}
 	if verifiedRoot == nil {
-		return nil, fmt.Errorf("tsl: signature does not cover the %s document root", root.Tag)
+		return nil, nil, fmt.Errorf("tsl: signature does not cover the %s document root", root.Tag)
 	}
 
 	// Serialize the verified element in its canonical form — the exact byte
 	// stream the signed digest covered.
 	b, err := xmldsig.MakeC14N10ExclusiveCanonicalizerWithPrefixList("").Canonicalize(verifiedRoot)
 	if err != nil {
-		return nil, fmt.Errorf("tsl: serialize verified document: %w", err)
+		return nil, nil, fmt.Errorf("tsl: serialize verified document: %w", err)
 	}
-	return b, nil
+	return b, signer, nil
 }

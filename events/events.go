@@ -1,16 +1,13 @@
-// Package events emits the trust-anchor security events through
-// go-sec-events. It adds one capability the upstream emitter lacks: emission
-// from background work (the refresh Tasker) where no azugo request context
-// exists — those events are stamped locally and written to the service logger
-// in the exact LogSink shape ("security_event" lines), so the SIEM stream is
-// uniform regardless of origin.
+// Package events emits the trust-anchor security events through go-sec-events,
+// from the request path and from background work alike — the refresh Tasker has
+// no request, and the library serves both.
 package events
 
 import (
+	"context"
 	"time"
 
 	"azugo.io/azugo"
-	"github.com/oklog/ulid/v2"
 	"go.uber.org/zap"
 
 	"github.com/gmb-lib/go-platform-kit/broker"
@@ -38,10 +35,16 @@ type Emitter struct {
 	log *zap.Logger
 }
 
-// New returns an Emitter that delivers request-scoped events through the
-// go-sec-events log sink and background events through log.
+// New returns an Emitter delivering both paths through the go-sec-events log
+// sink. The sink carries log because the refresh Tasker emits with no request
+// whose logger it could borrow; log is also where a failure to emit is reported
+// when there is no request to report it against.
 func New(log *zap.Logger) *Emitter {
-	return &Emitter{sec: secevents.NewEmitter(secevents.NewLogSink()), log: log}
+	if log == nil {
+		log = zap.NewNop()
+	}
+
+	return &Emitter{sec: secevents.NewEmitter(secevents.NewLogSinkFor(log)), log: log}
 }
 
 // Emit delivers one security event. ctx may be nil for background work.
@@ -62,50 +65,34 @@ func (e *Emitter) Emit(ctx *azugo.Context, eventType string, sev secevents.Sever
 	}
 
 	if ctx != nil {
-		if err := e.sec.Emit(ctx, ev); err != nil && e.log != nil {
+		if err := e.sec.Emit(ctx, ev); err != nil {
 			e.log.Error("security event emission failed", zap.String("event_type", eventType), zap.Error(err))
 		}
+
 		return
 	}
 
-	// Background path: stamp locally and mirror the LogSink line shape.
-	ev.EventID = ulid.Make().String()
-	ev.OccurredAt = time.Now().UTC()
-
-	if e.log == nil {
-		return
-	}
-	fields := []zap.Field{
-		zap.String("event_id", ev.EventID),
-		zap.Time("occurred_at", ev.OccurredAt),
-		zap.String("event_type", ev.EventType),
-		zap.String("category", string(broker.CategorySecurity)),
-		zap.String("outcome", string(ev.Outcome)),
-		zap.String(secevents.AttrSeverity, string(sev)),
-		zap.Any("attributes", ev.Attributes),
-	}
-	// Route the log level by severity AND outcome: reserve error for genuine
-	// failures/denials. A success-outcome event (e.g. a first-ingest anchor
-	// addition, which AnchorChange stamps High/success) is noteworthy, not an
-	// error — cap it at warn so the SIEM stream isn't a wall of red.
-	switch {
-	case outcome != broker.OutcomeSuccess &&
-		(sev == secevents.SeverityCritical || sev == secevents.SeverityHigh):
-		e.log.Error("security_event", fields...)
-	case sev == secevents.SeverityCritical || sev == secevents.SeverityHigh ||
-		sev == secevents.SeverityWarning:
-		e.log.Warn("security_event", fields...)
-	default:
-		e.log.Info("security_event", fields...)
+	// The refresh Tasker has no request. Same tagging, sanitizing, stamping and
+	// rendered shape; only the correlation ids are absent, because there is no
+	// request to take them from.
+	if err := e.sec.EmitBackground(context.Background(), ev); err != nil {
+		e.log.Error("security event emission failed", zap.String("event_type", eventType), zap.Error(err))
 	}
 }
 
 // AnchorChange emits one trust.anchor_change event for a diff entry.
-// Additions and removals are high severity, metadata changes info.
+// Additions and removals are warnings, metadata changes info.
+//
+// A trust anchor appearing or disappearing is noteworthy and worth a human
+// looking — but it is a successful, expected outcome of a refresh, not a
+// failure. It used to be stamped high severity and then have its log level
+// quietly capped at warn so the SIEM stream was not a wall of red, which left
+// the two disagreeing: the line said warn while the severity field on it said
+// high. Warning is what was meant all along, and now both say it.
 func (e *Emitter) AnchorChange(ctx *azugo.Context, kind, territory, fingerprint, tspName, serviceName, status, detail string, pending bool) {
 	sev := secevents.SeverityInfo
 	if kind == "added" || kind == "removed" {
-		sev = secevents.SeverityHigh
+		sev = secevents.SeverityWarning
 	}
 	attrs := map[string]any{
 		"kind":         kind,

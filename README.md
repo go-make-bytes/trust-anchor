@@ -71,7 +71,7 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 | `GET /v1/anchors.json` | `trust:read` | Same filters — base64-DER certificates plus TSP/service metadata, qualifications, fingerprints, and `type` / `useCases` / `tlSequence` where set |
 | `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `internalCount` |
 | `POST /v1/pending/{fingerprint}/approve` | `trust:admin` | Approve a held addition (hold activation mode) |
-| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle |
+| `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle. Answers `200` with a per-half report — the declared outcome and the cycle outcome stated separately, and `snapshot` always the id being served. `502` only when nothing has ever been served and the cycle failed |
 
 **Bundle filters** (shared by both `/v1/anchors*` routes, all optional):
 
@@ -139,7 +139,7 @@ flowchart TB
     TASK -. kick .-> MGR
 ```
 
-Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`ingest/`](ingest) fetcher, pipeline, pivot walk, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission.
+Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`source/`](source) the per-source-type adapter contract (fetch → verify → extract) · [`ingest/`](ingest) fetcher, the source adapters (EU LOTL incl. the pivot walk, national TLs incl. the ".sha2" change-detection), pipeline orchestration, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission.
 
 ### Ingest → verify → snapshot → serve
 
@@ -203,13 +203,13 @@ The signer set is layered:
 
 **Rotation** is expected only every few years (the pivot chain handles interim signer rotations automatically). The snapshot's `advertisedOj` field is the signal: when it names an Official Journal reference newer than the pinned set, a fresh signer set has been published. Adopting it means updating `trust-config/` (drop the new PEMs in, regenerate the manifest, confirm each SHA-256 against the EU DSS oj-certificates service, rebuild the image) or mounting an updated manifest for an urgent change — see [`trust-config/README.md`](trust-config/README.md). `advertisedOj` drives no automatic trust decision; the trusted signer set is always the operator-pinned one.
 
-**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. A per-territory failure carries that territory's previous data over (marked `carriedOver`), so one unreachable national list never blocks the others. On the very first cycle there is nothing to carry over — a territory failure fails the cycle rather than serve a partial first snapshot. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error.
+**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. Every territory is an independent upstream and is treated as one: a per-territory failure carries that territory's previous data over (marked `carriedOver`), and a territory with **no** previous data (a fresh install, or a newly configured territory) is recorded in the snapshot as a **failed entry** (`failed` + `failureReason`, zero anchors) while the rest of the cycle completes — one broken national list never suppresses the twenty-six healthy ones, and a broken territory is visible instead of silently absent. The floor stays loud: the LOTL failing, or *every* configured territory failing with nothing to carry over, fails the whole cycle. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error. A failed entry contributes nothing to the snapshot id (health is a process outcome, not trust content), so consumer ETags move only when trust actually changes.
 
 ### The internal trust source — operator-declared EUDI anchors
 
 The EU has not yet published machine-readable trust lists for the newer EUDI actor types (PID providers, wallet providers, Access CAs, WRPRC issuers, (Q)EAA providers, status-list signers). Until it does, an operator running a real private trust ecosystem can declare those anchors directly via `INTERNAL_TRUST_SOURCE` (a YAML file; unset = feature off, zero behaviour change). The whole consuming fleet then resolves them through the same API, snapshots, ETags, staleness and events as TL-sourced anchors, and reads them back through the additive `type=` filter. A worked example lives at [`examples/internal-trust.yaml`](examples/internal-trust.yaml).
 
-Trust posture: an internal anchor carries the **same posture as the pinned bootstrap** — each declared certificate is trusted directly, with no signature chain behind it. The file *is* the security boundary; treat it as key material (ownership, review, change control). Entries activate immediately and bypass hold mode — deploying the file is the operator's approval. Loading is **fail-closed at whole-file granularity**: any invalid entry (unknown type, bad territory, wrong number of certificate sources, unparseable or expired certificate, duplicate fingerprint) rejects the entire file for that cycle, naming the offending entry by name and fingerprint — never by file contents. A bad edit after the first run carries the previous internal set over and raises `trust.internal_source_error`. The file is re-read **at boot** (the restored snapshot is reconciled against the file as it is now) and **on every refresh cycle** — and both work with the trusted-list upstream unreachable, which is exactly when a declared CA is most urgently needed. There is no file-watcher, so the operating habit is: **edit → `POST /v1/refresh` (or restart) → confirm the snapshot id changed** (`GET /v1/snapshot`). The parser is fuzzed and must never panic on malformed input.
+Trust posture: an internal anchor carries the **same posture as the pinned bootstrap** — each declared certificate is trusted directly, with no signature chain behind it. The file *is* the security boundary; treat it as key material (ownership, review, change control). Entries activate immediately and bypass hold mode — deploying the file is the operator's approval. Loading is **fail-closed at whole-file granularity**: any invalid entry (unknown type, bad territory, wrong number of certificate sources, unparseable or expired certificate, duplicate fingerprint) rejects the entire file for that cycle, naming the offending entry by name and fingerprint — never by file contents. A bad edit after the first run carries the previous internal set over and raises `trust.internal_source_error`. The file is re-read **at boot** (the restored snapshot is reconciled against the file as it is now) and **on every refresh cycle** — and both work with the trusted-list upstream unreachable, which is exactly when a declared CA is most urgently needed. There is no file-watcher, so the operating habit is: **edit → `POST /v1/refresh` (or restart) → confirm the snapshot id changed** (`GET /v1/snapshot`). The refresh response reports the declared half explicitly (`declared.changed`, plus `carriedOver` + `error` when the load failed), so an upstream outage can never mask what happened to the declared set. One gotcha worth knowing: change detection is fingerprint-based, so a **metadata-only edit** (an entry's `name` or `territory` label) is silently a no-op — served `serviceName` comes from the certificate subject, not the declaration; to change what is served, add or remove a certificate. The parser is fuzzed and must never panic on malformed input.
 
 ### Hold mode and change governance
 
@@ -225,7 +225,7 @@ The store backend is derived from configuration (`store.StoreBackend`):
 
 | Backend | Selected by | Use |
 |---|---|---|
-| **postgres** | `TRUST_STORE_DSN` set (takes precedence) | Scaled / multi-instance deployments |
+| **postgres** | `TRUST_STORE_DSN` set (takes precedence) | Scaled / multi-instance deployments. Pool size comes from the DSN itself — `pool_max_conns` (pgx reads it and strips it before Postgres sees it; its default is the host's CPU count): set it explicitly to the deployment's connection budget, e.g. `?sslmode=…&pool_max_conns=4&pool_min_conns=1`. |
 | **s3** | `TRUST_SNAPSHOT_BUCKET` set | Platform default (S3-API object storage) |
 | **fs** | `TRUST_SNAPSHOT_DIR` set | Local development |
 | **memory** | none of the above | Tests only — snapshots do not survive a restart |
@@ -253,6 +253,21 @@ curl "https://trust-anchor:8080/v1/anchors.json?type=access_ca"
 curl -X POST -H "X-API-Key: $TRUST_ADMIN_KEY" "https://trust-anchor:8080/v1/refresh"
 ```
 
+A refresh answers with both halves of what it did — the declared reconcile and the upstream cycle
+— and `snapshot` is always the id being served as it answers:
+
+```json
+{
+  "snapshot": "7c25d7ad…",
+  "changed": true,
+  "declared": { "changed": true },
+  "cycle": { "ok": true, "territories": { "ok": 26, "failed": ["DE"] } }
+}
+```
+
+With the upstream unreachable, `declared` still reports truthfully (`cycle.ok` goes `false` with
+the error; `territories` is omitted — a failed cycle produced no per-territory outcomes).
+
 ---
 
 ## Consuming a bundle
@@ -279,7 +294,8 @@ Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METR
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists location |
 | `LOTL_BOOTSTRAP_CERTS_PATH` | baked `/etc/trust-anchor/lotl-signers.yaml` | Operator-pinned LOTL signer set — the first-install seed (a `lotl-signers.yaml` manifest carrying its own OJ reference, or a PEM/DER file/dir). The image bakes a default; after first install the persisted store is authoritative and this path is ignored |
-| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest (comma-separated) |
+| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed |
+| `TRUST_ALLOW_HTTP_TERRITORIES` | *(empty)* | Territories whose trusted list may be fetched over its published plain-http pointer (e.g. `SK`). Default empty = https required. Integrity comes from the XMLDSig verification against the LOTL-pinned signers, never from transport; this waives only the defense-in-depth https rule, per named territory, with a loud log line per cycle. Never applies to the LOTL itself |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | Accepted service statuses (short names or full TS 119 612 URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence; the earliest TL `NextUpdate` is honoured too |
 | `TRUST_ACTIVATION_MODE` | `auto` | `auto` \| `hold` (additions held for operator approval) |
@@ -297,7 +313,7 @@ Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METR
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` | — / `svc:trust-anchor` | Inbound DPoP validation (plus standard `DPOP_*` vars); consulted only when `AUTH_MODE=dpop` |
 | `TRUST_ADMIN_KEY` | — | `AUTH_MODE=internal` only: the `X-API-Key` value that grants `trust:admin`. **Secret** — required (boot fails closed if empty), never logged. Supports the `TRUST_ADMIN_KEY_FILE` convention |
 
-Upstream egress is confined to exactly the LOTL host and the TL hosts discovered from the *verified* LOTL — https only, TLS verified, size-capped. Any non-https pointer raises `egress.violation` and that territory falls back to its last good data.
+Upstream egress is confined to exactly the LOTL host and the TL hosts discovered from the *verified* LOTL — https only, TLS verified, size-capped. Any non-https pointer raises `egress.violation` and that territory falls back to its last good data (or a failed entry when it has none). One narrow, explicit exception: a territory named in `TRUST_ALLOW_HTTP_TERRITORIES` may be fetched over its published plain-http pointer (Slovakia's LOTL pointer is http, and its https alternative serves a wrong-hostname certificate). List **integrity never rests on transport** — every fetched list is XMLDSig-verified against the LOTL-pinned signers before anything trusts it — so the opt-in waives only the defense-in-depth transport rule, per named territory, logged loudly on every cycle. It can never apply to the LOTL itself.
 
 ---
 
@@ -317,12 +333,13 @@ by construction (source tags, territory codes, the closed anchor-type taxonomy).
 | `trust_sync_last_success_timestamp_seconds` | gauge | Unix time of the last successful refresh cycle. `0` until the first success — `time() - value` alerting catches both "never" and "stopped" |
 | `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
 | `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of the operator-declared source (`internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
+| `trust_territory_failed{territory}` | gauge 0/1 | `1` while the territory is served as a failed entry (its list could not be ingested and no previous data exists — zero anchors for it). The alerting answer to silent degradation: a wide territory set quietly shrinking to a few healthy lists is visible without diffing snapshots. Same posture as the declared gauge — never a health flip |
 
 ### Security events
 
 | Event | Severity | When |
 |---|---|---|
-| `trust.anchor_change` | high (add/remove), info (metadata) | A CA was added, removed, or changed in a bundle. Success-outcome, so logged at warn/info — a first ingest adding many anchors is not a wall of errors |
+| `trust.anchor_change` | warning (add/remove), info (metadata) | A CA was added, removed, or changed in a bundle. Noteworthy and worth a human looking, but the successful outcome of a refresh — so a first ingest adding many anchors is not a wall of errors |
 | `trust.pending_approved` | warning | A held addition was approved (via API or auto-release) |
 | `trust.refresh_failure` | warning | A cycle (or a persistence step) failed; the last good snapshot is still served |
 | `trust.stale` | warning | Served data is past `NextUpdate` + grace |
@@ -370,13 +387,13 @@ Review, do not alert:
 
 | Event | Why it matters |
 |---|---|
-| `trust.anchor_change` | The record of what changed and when — the first thing to read after any trust incident, and the only place a removed certificate authority is visible after the fact. High severity for add/remove, informational for metadata. |
+| `trust.anchor_change` | The record of what changed and when — the first thing to read after any trust incident, and the only place a removed certificate authority is visible after the fact. Warning severity for add/remove, informational for metadata. |
 | `trust.pending_approved` | A held addition became active, and whether a human or the auto-release did it. |
 | `authz.denied` | Occasional entries are normal (a misconfigured client). A sustained pattern from one caller is worth understanding. |
 
 Two operating notes that are easy to learn the hard way:
 
-- **A first ingest emits many `trust.anchor_change` events at high severity.** That is a populated
+- **A first ingest emits many `trust.anchor_change` events at warning severity.** That is a populated
   bundle, not an incident. Alert on the *rate after steady state*, not on presence.
 - **Background events carry no request correlation id**, because refresh cycles run outside any
   request. They are written to the service log in the same structured shape as request-scoped
@@ -457,7 +474,7 @@ AUTH_ISSUER_URL=http://localhost:8080 SERVICE_AUDIENCE=svc:trust-anchor \
 go run ./cmd/server web
 ```
 
-The Docker build context is this module directory (no local `replace` directives — the `gmb-sig` / `gmb-lib` dependencies are fetched at their tags): `docker build -t trust-anchor:dev .`. First install seeds the bootstrap from the baked `lotl-signers.yaml`.
+The Docker build context is this module directory (no local `replace` directives — the `gmb-lib` dependencies are fetched at their public tags): `docker build -t trust-anchor:dev .`. First install seeds the bootstrap from the baked `lotl-signers.yaml`.
 
 When a list changes shape or yearly, refresh the fixtures under `testdata/` (the current LOTL + pivots + national TLs) and update the expected counts/fingerprints in the extraction and pipeline tests; verify against live first with the `live`-tagged refresh test.
 
@@ -504,6 +521,16 @@ not omissions — recorded here so they are not rediscovered as defects.
 - **National-TL staleness is a warning, not a failure** — the same posture the standard itself
   takes for TLs past `NextUpdate` (`[ETSI TS 119 615 V1.4.1 §4.2.4]` PRO-4.2.4-10). The
   configurable grace window and the fail-safe carry-over are documented extensions on top.
+- **The LOTL, by contrast, hard-fails when expired** (`[ETSI TS 119 615 V1.4.1 §4.1.4]`
+  PRO-4.1.4-13, `LOTL_NEXTUPDATE_PASSED`): a LOTL past its own `NextUpdate` no longer
+  authenticates — the cycle fails and the previous snapshot stays served. The asymmetry with the
+  national-TL warning above is the standard's own.
+- **Signer self-consistency is enforced** (`[ETSI TS 119 615 V1.4.1 §4.1.4]` PRO-4.1.4-10(a) /
+  PRO-4.1.4-11(g)): on direct verification the LOTL's signing certificate must be in the LOTL's
+  own EU self-pointer set, and every processed pivot's signing certificate must be in that
+  pivot's own set — publication-consistency checks on top of the pinned chain of trust. After a
+  pivot walk the LOTL-level property holds by construction: the re-verification pins the LOTL's
+  signer into the newest pivot's set, which is the standard's n>0 requirement.
 
 ---
 
@@ -514,3 +541,11 @@ not omissions — recorded here so they are not rediscovered as defects.
 - **No file-watcher.** The internal trust source is re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.
 - **`qscdOnly` fidelity depends on the upstream list.** The flag maps both QSCD-positive qualifiers (`QCWithQSCD` and `QCQSCDManagedOnBehalf` — the remote/cloud-signing shape, per `[ETSI TS 119 615 V1.4.1 §4.5.4]` Table 7); it remains an anchor-level approximation of a per-certificate determination (see the conformance position above), and some national lists carry the qualifiers only on historical entries.
 - **Single object-store / single DB endpoint.** The S3, filesystem and Postgres backends each target one endpoint; there is no built-in multi-region replication beyond what the chosen backend provides.
+
+---
+
+## Licence and contributing
+
+MIT — see [LICENSE](LICENSE). Contributions are welcome; [CONTRIBUTING.md](CONTRIBUTING.md) has
+the build-and-test gate and the process. Security problems go through the private route in
+[SECURITY.md](SECURITY.md), never a public issue.

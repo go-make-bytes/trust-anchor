@@ -362,12 +362,68 @@ func TestRefreshEndpoint(t *testing.T) {
 	var out response.Refresh
 	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &out)))
 	qt.Check(t, qt.Equals(out.Snapshot, snap.ID))
+	qt.Check(t, qt.IsTrue(out.Cycle.OK))
+	qt.Assert(t, qt.IsNotNil(out.Cycle.Territories))
+	qt.Check(t, qt.Equals(out.Cycle.Territories.OK, 2))
 
-	// Upstream failure → 502, last good still served.
+	// Upstream failure with a snapshot served: still 200 — the cycle outcome
+	// is data in the report, and the snapshot id is the one being served.
 	app.Manager().SetRefresher(&fakeRefresher{err: errors.New("upstream down")})
 	resp, err = tc.Post("/v1/refresh", nil, tc.WithHeader("X-Test-Scopes", "trust:admin"))
 	qt.Assert(t, qt.IsNil(err))
-	qt.Check(t, qt.Equals(resp.StatusCode(), fasthttp.StatusBadGateway))
-	fasthttp.ReleaseResponse(resp)
+	qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+	var failed response.Refresh
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &failed)))
+	qt.Check(t, qt.IsFalse(failed.Cycle.OK))
+	qt.Check(t, qt.Not(qt.Equals(failed.Cycle.Error, "")))
+	qt.Check(t, qt.IsFalse(failed.Changed))
+	qt.Check(t, qt.Equals(failed.Snapshot, snap.ID))
 	qt.Check(t, qt.Equals(app.Manager().Active().ID, snap.ID))
+
+	// The served-id invariant: the id a refresh reports equals what
+	// /v1/snapshot answers immediately after.
+	resp, err = tc.Get("/v1/snapshot", tc.WithHeader("X-Test-Scopes", "trust:read"))
+	qt.Assert(t, qt.IsNil(err))
+	var snapOut response.Snapshot
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &snapOut)))
+	qt.Check(t, qt.Equals(snapOut.ID, failed.Snapshot))
+}
+
+// TestSnapshotEndpointNamesFailedTerritories: a served snapshot carrying a
+// failed territory names it, with the reason, in the summary.
+func TestSnapshotEndpointNamesFailedTerritories(t *testing.T) {
+	ta, app, snap := testApp(t)
+	defer ta.Stop()
+	tc := ta.TestClient()
+
+	flipped := testSnapshot(t)
+	flipped.Territories = append(flipped.Territories, &trust.Territory{
+		Code: "DE", Failed: true, FailureReason: "unreachable", Anchors: []trust.Anchor{},
+	})
+	flipped.Pending = snap.Pending
+	flipped.ComputeID()
+	app.Manager().SetRefresher(&fakeRefresher{snap: flipped})
+
+	resp, err := tc.Post("/v1/refresh", nil, tc.WithHeader("X-Test-Scopes", "trust:admin"))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+	var out response.Refresh
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &out)))
+	qt.Assert(t, qt.IsNotNil(out.Cycle.Territories))
+	qt.Check(t, qt.DeepEquals(out.Cycle.Territories.Failed, []string{"DE"}))
+
+	resp, err = tc.Get("/v1/snapshot", tc.WithHeader("X-Test-Scopes", "trust:read"))
+	qt.Assert(t, qt.IsNil(err))
+	var snapOut response.Snapshot
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &snapOut)))
+	var de *response.TerritorySummary
+	for i := range snapOut.Territories {
+		if snapOut.Territories[i].Code == "DE" {
+			de = &snapOut.Territories[i]
+		}
+	}
+	qt.Assert(t, qt.IsNotNil(de))
+	qt.Check(t, qt.IsTrue(de.Failed))
+	qt.Check(t, qt.Equals(de.FailureReason, "unreachable"))
+	qt.Check(t, qt.Equals(de.AnchorCount, 0))
 }

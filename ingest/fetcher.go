@@ -31,6 +31,16 @@ type Fetcher struct {
 
 	mu      sync.RWMutex
 	allowed map[string]struct{}
+	// httpAllowed holds hosts explicitly permitted to be fetched over plain
+	// http — fed only by the pipeline for territories the operator named in
+	// TRUST_ALLOW_HTTP_TERRITORIES (some publishers, Slovakia's for one,
+	// point their trusted list at an http URL). List integrity never rests
+	// on transport: every fetched list is XMLDSig-verified against the
+	// LOTL-pinned signers before anything trusts it — https-only is
+	// defense-in-depth, waived here host-by-host on an explicit operator
+	// declaration. The LOTL itself is never fetched over http: nothing on
+	// its path registers a host here.
+	httpAllowed map[string]struct{}
 }
 
 // NewFetcher builds a Fetcher allowing the given initial hosts.
@@ -41,10 +51,11 @@ func NewFetcher(timeout time.Duration, maxSize int64, initialHosts ...string) *F
 		// is otel-instrumented so LOTL/national-TL fetches show as client
 		// spans (no-op when tracing is inert). The correlation id is intentionally
 		// NOT propagated — these are external trust-list sources, not our services.
-		client:  &http.Client{Timeout: timeout, Transport: observability.InstrumentedTransport(nil)},
-		timeout: timeout,
-		maxSize: maxSize,
-		allowed: map[string]struct{}{},
+		client:      &http.Client{Timeout: timeout, Transport: observability.InstrumentedTransport(nil)},
+		timeout:     timeout,
+		maxSize:     maxSize,
+		allowed:     map[string]struct{}{},
+		httpAllowed: map[string]struct{}{},
 	}
 	for _, h := range initialHosts {
 		f.Allow(h)
@@ -69,14 +80,47 @@ func (f *Fetcher) Allow(host string) {
 	f.mu.Unlock()
 }
 
+// AllowHTTPFor marks the URL's host as permitted for plain-http fetches (see
+// httpAllowed). Call it only for a territory the operator explicitly opted
+// in; it does not itself add the host to the egress allow-list.
+func (f *Fetcher) AllowHTTPFor(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("ingest: invalid URL %q: %w", raw, err)
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("ingest: URL %q has no host", raw)
+	}
+	f.mu.Lock()
+	f.httpAllowed[strings.ToLower(u.Hostname())] = struct{}{}
+	f.mu.Unlock()
+	return nil
+}
+
+// schemeOK reports whether the URL's scheme is acceptable: https always,
+// plain http only for a host the operator opted in via AllowHTTPFor.
+func (f *Fetcher) schemeOK(u *url.URL) bool {
+	if u.Scheme == "https" {
+		return true
+	}
+	if u.Scheme != "http" {
+		return false
+	}
+	f.mu.RLock()
+	_, ok := f.httpAllowed[strings.ToLower(u.Hostname())]
+	f.mu.RUnlock()
+	return ok
+}
+
 // AllowURL adds the URL's host to the allow-list after validating the scheme.
-// It returns an error (without adding) for non-https locations.
+// It returns an error (without adding) for non-https locations, unless the
+// host carries an explicit plain-http opt-in (AllowHTTPFor).
 func (f *Fetcher) AllowURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return fmt.Errorf("ingest: invalid URL %q: %w", raw, err)
 	}
-	if u.Scheme != "https" {
+	if !f.schemeOK(u) {
 		return fmt.Errorf("%w: %q is not https", ErrEgressBlocked, raw)
 	}
 	f.Allow(u.Hostname())
@@ -92,7 +136,7 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("ingest: invalid URL %q: %w", rawURL, err)
 	}
-	if u.Scheme != "https" {
+	if !f.schemeOK(u) {
 		return nil, fmt.Errorf("%w: %q is not https", ErrEgressBlocked, rawURL)
 	}
 	f.mu.RLock()

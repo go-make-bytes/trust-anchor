@@ -64,6 +64,7 @@ func NewManager(pipeline Refresher, st store.Store, ev *events.Emitter, log *zap
 func (m *Manager) activate(next *trust.Snapshot) {
 	m.active.Store(next)
 	setAnchorGauges(next)
+	setTerritoryFailedGauges(next)
 }
 
 // Initialize loads the persisted bootstrap + snapshot. When the store has no
@@ -188,10 +189,25 @@ func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (
 	return next, true, rep
 }
 
+// RefreshOutcome reports one refresh trigger's two independent halves — the
+// operator-declared reconcile and the upstream ingestion cycle — so a caller
+// can state each outcome truthfully instead of collapsing them into one
+// status. Snapshot is what is being served when the call returns; it is nil
+// only when nothing has ever been served and the cycle failed.
+type RefreshOutcome struct {
+	Snapshot        *trust.Snapshot
+	Changed         bool // either half changed what is served
+	DeclaredChanged bool
+	Declared        trust.DeclaredSourceState
+	CycleErr        error // nil when the cycle produced a snapshot
+}
+
 // Refresh runs one ingestion cycle. On failure the previous snapshot stays
 // active and a security event is raised — the one unacceptable failure mode
-// is serving unverified or partial data, not serving slightly old data.
-func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
+// is serving unverified or partial data, not serving slightly old data. The
+// outcome reports the declared and cycle halves separately: a declared edit
+// applies (and is reported as applied) even when the cycle fails.
+func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 	// Detach: ctx may be (derived from) a pooled request context, and
 	// persistence must not be cancelled halfway by a disconnecting client.
 	ctx = context.WithoutCancel(ctx)
@@ -209,18 +225,30 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 	if declaredChanged {
 		logInventory(m.log, prev, declRep)
 	}
+	out := RefreshOutcome{
+		Snapshot:        prev,
+		Changed:         declaredChanged,
+		DeclaredChanged: declaredChanged,
+		Declared:        declRep.Internal,
+	}
 
 	next, err := m.pipeline.Refresh(ctx, prev, boot)
 	if err != nil {
 		m.events.RefreshFailure(nil, "cycle", err.Error())
 		m.log.Error("refresh cycle failed — keeping last good snapshot", zap.Error(err))
-		return prev, declaredChanged, err
+		out.CycleErr = err
+		return out
+	}
+	// The cycle reloads the declared source itself; its report is the
+	// fresher of the two.
+	if next.DeclaredLoad != nil {
+		out.Declared = next.DeclaredLoad.Internal
 	}
 
 	cycleChanged := prev == nil ||
 		next.ID != prev.ID ||
 		!pendingEqual(prev.Pending, next.Pending) ||
-		carriedOverChanged(prev, next)
+		territoryStateChanged(prev, next)
 
 	if cycleChanged {
 		if err := m.store.SaveSnapshot(ctx, next); err != nil {
@@ -249,13 +277,14 @@ func (m *Manager) Refresh(ctx context.Context) (*trust.Snapshot, bool, error) {
 		}
 	}
 
-	changed := declaredChanged || cycleChanged
+	out.Snapshot = next
+	out.Changed = declaredChanged || cycleChanged
 	m.log.Info("refresh cycle complete",
 		zap.String("snapshot", next.ID),
-		zap.Bool("changed", changed),
+		zap.Bool("changed", out.Changed),
 		logUint("lotl_sequence", next.LOTLSequence),
 		logInt("pending", len(next.Pending)))
-	return next, changed, nil
+	return out
 }
 
 // ApprovePending approves a held addition by certificate fingerprint: the
@@ -358,10 +387,15 @@ func pendingEqual(a, b []trust.PendingAnchor) bool {
 	return true
 }
 
-func carriedOverChanged(prev, next *trust.Snapshot) bool {
+// territoryStateChanged reports whether any territory's health or sequence
+// moved between two snapshots. Health (carried-over, failed) is deliberately
+// outside the content id, so this check is what makes a health flip still
+// persist and activate a new snapshot.
+func territoryStateChanged(prev, next *trust.Snapshot) bool {
 	for _, t := range next.Territories {
 		pt := prev.Territory(t.Code)
-		if pt == nil || pt.CarriedOver != t.CarriedOver || pt.TLSequence != t.TLSequence {
+		if pt == nil || pt.CarriedOver != t.CarriedOver || pt.TLSequence != t.TLSequence ||
+			pt.Failed != t.Failed || pt.FailureReason != t.FailureReason {
 			return true
 		}
 	}
