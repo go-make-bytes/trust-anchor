@@ -97,7 +97,7 @@ require (
 	github.com/VictoriaMetrics/metrics v1.44.0
 	github.com/beevik/etree v1.7.1
 	github.com/gmb-lib/go-authbyte v0.20.2
-	github.com/gmb-lib/go-platform-kit v1.11.0
+	github.com/gmb-lib/go-platform-kit v1.11.1
 	github.com/gmb-lib/go-sec-events v1.2.0
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
