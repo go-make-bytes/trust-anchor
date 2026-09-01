@@ -1,13 +1,12 @@
 // Package source defines the multi-source trust adapter contract for the
 // trust-anchor service.
 //
-// SCAFFOLD ONLY. The source-type taxonomy and the adapter interfaces are
-// defined here, but the existing LOTL / national-TL ingestion in package
-// `ingest` is NOT yet migrated onto them. That migration is a refactor of
-// trust-critical code whose acceptance bar is byte-identical output, so it must
-// be done where it can be built and run against the recorded fixtures. Nothing
-// in this package is wired into the pipeline yet; it compiles standalone and
-// exists to pin the contract.
+// The EU LOTL and the national trusted lists are ingested through Source
+// implementations in package `ingest` (fetch → verify → extract, one adapter
+// per source type), so a new list-shaped source is a new adapter rather than
+// a new branch through the pipeline. Registry-shaped sources (RegistrySource)
+// and the remaining declared sources are not yet migrated; their contracts
+// are pinned here.
 package source
 
 import (

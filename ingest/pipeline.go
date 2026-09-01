@@ -14,6 +14,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/go-make-bytes/trust-anchor/events"
+	"github.com/go-make-bytes/trust-anchor/source"
 	"github.com/go-make-bytes/trust-anchor/trust"
 	"github.com/go-make-bytes/trust-anchor/tsl"
 )
@@ -273,102 +274,36 @@ func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.
 	return next, true, rep, nil
 }
 
-// ingestLOTL fetches and verifies the LOTL, processing the pivot chain when
-// the current signer set no longer verifies it directly. Beyond signature
-// verification it enforces two [ETSI TS 119 615 V1.4.1 §4.1.4] rules: an
-// expired LOTL is refused (PRO-4.1.4-13, LOTL_NEXTUPDATE_PASSED), and on
-// direct verification the LOTL's signing certificate must be in the LOTL's
-// own EU self-pointer set (PRO-4.1.4-10(a)) — a publication-consistency
-// check. After a pivot walk that same property is enforced by construction:
-// the re-verification pins the LOTL's signer into the newest pivot's set,
-// which is the standard's n>0 requirement.
+// ingestLOTL runs the LOTL through its source adapter: fetch, then the
+// verification complex (direct vs pivot walk, expiry, self-consistency — see
+// euLOTLSource.Verify). This function owns only the signer-set precedence:
+// continue from the previous snapshot's (pivot-rotated) signer set when one
+// exists, otherwise start from the operator-pinned bootstrap set.
 func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap, now time.Time) (*tsl.TrustedList, []*x509.Certificate, uint64, error) {
-	if err := p.fetcher.AllowURL(p.cfg.LOTLURL); err != nil {
+	src := &euLOTLSource{p: p, url: p.cfg.LOTLURL, now: now}
+
+	raw, err := src.Fetch(ctx, nil)
+	if err != nil {
 		return nil, nil, 0, err
 	}
-	raw, err := p.fetcher.Fetch(ctx, p.cfg.LOTLURL)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("ingest: fetch LOTL: %w", err)
-	}
 
-	// Unverified pre-parse: pivot URLs only. Trust decisions follow only
-	// after signature verification.
-	pre, err := tsl.Parse(raw)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("ingest: pre-parse LOTL: %w", err)
-	}
-	refs := pivotRefs(pre.SchemeInformation.SchemeInformationURI.URI)
-	maxPivot := uint64(0)
-	if len(refs) > 0 {
-		maxPivot = refs[len(refs)-1].seq
-	}
-
-	// Signer-set precedence: continue from the previous snapshot's
-	// (pivot-rotated) signer set when one exists; otherwise start from the
-	// operator-pinned bootstrap set.
-	var signers []*x509.Certificate
-	var pivotSeq uint64
+	var pinned [][]byte
 	switch {
 	case prev != nil && len(prev.LOTLSignersDER) > 0:
-		signers, err = prev.LOTLSigners()
-		pivotSeq = prev.LOTLPivotSeq
+		pinned = prev.LOTLSignersDER
+		src.pivotSeq = prev.LOTLPivotSeq
 	default:
-		signers, err = boot.Certificates()
+		certs, cerr := boot.Certificates()
+		if cerr != nil {
+			return nil, nil, 0, cerr
+		}
+		pinned = certsDER(certs)
 	}
-	if err != nil {
+
+	if _, err := src.Verify(ctx, raw, pinned); err != nil {
 		return nil, nil, 0, err
 	}
-
-	direct := false
-	verified, lotlSigner, verr := tsl.Verify(raw, signers)
-	if verr == nil {
-		direct = true
-		// The current set supersedes any unprocessed pivots — they are
-		// historical rotations that ended in this set.
-		if maxPivot > pivotSeq {
-			pivotSeq = maxPivot
-		}
-	} else {
-		// Direct verification failed — the signer set may have rotated via
-		// pivots since our last cycle. Walk the unprocessed chain.
-		p.log.Info("LOTL direct verification failed, processing pivot chain", zap.Error(verr))
-		signers, pivotSeq, err = p.walkPivots(ctx, refs, signers, pivotSeq)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("ingest: pivot chain: %w (after direct verification failed: %w)", err, verr)
-		}
-		verified, lotlSigner, err = tsl.Verify(raw, signers)
-		if err != nil {
-			return nil, nil, 0, fmt.Errorf("ingest: LOTL verification failed after pivot processing: %w", err)
-		}
-	}
-
-	lotl, err := tsl.Parse(verified)
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("ingest: parse verified LOTL: %w", err)
-	}
-	if lotl.SchemeInformation.TSLType != tsl.TSLTypeEUListOfTheLists {
-		return nil, nil, 0, fmt.Errorf("ingest: LOTL has unexpected TSLType %q", lotl.SchemeInformation.TSLType)
-	}
-
-	// An expired LOTL no longer authenticates — the publisher's own validity
-	// promise has run out (TS 119 615 PRO-4.1.4-13). Cycle failure: the
-	// previous snapshot stays served. Deliberately asymmetric with national
-	// TLs, whose staleness is a warning by the standard's own rule
-	// (PRO-4.2.4-10) and stays the carry-over + trust.stale posture.
-	if nu := lotl.SchemeInformation.NextUpdate.DateTime; nu != nil && now.After(*nu) {
-		return nil, nil, 0, fmt.Errorf("ingest: LOTL_NEXTUPDATE_PASSED: the LOTL's NextUpdate %s has passed — refusing to authenticate an expired list", nu.Format(time.RFC3339))
-	}
-
-	// On direct verification the LOTL's signing certificate must be in the
-	// LOTL's own EU self-pointer set (PRO-4.1.4-10(a)) — it catches an
-	// upstream publication mistake where the list is signed by a key its own
-	// content does not advertise.
-	if direct {
-		if err := lotlSignerSelfConsistent(lotlSigner, lotl); err != nil {
-			return nil, nil, 0, err
-		}
-	}
-	return lotl, signers, pivotSeq, nil
+	return src.list, src.signers, src.pivotSeq, nil
 }
 
 // lotlSignerSelfConsistent checks TS 119 615 PRO-4.1.4-10(a): the certificate
@@ -444,36 +379,39 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 	if err != nil {
 		return nil, err
 	}
-	if p.cfg.allowsHTTP(code) {
-		if err := p.fetcher.AllowHTTPFor(ptr.TSLLocation); err != nil {
-			return nil, err
-		}
-		p.log.Warn("territory trusted list will be fetched over plain http by explicit operator opt-in — integrity comes from the XMLDSig verification, not transport",
-			zap.String("territory", code), zap.String("url", ptr.TSLLocation))
-	}
-	if err := p.fetcher.AllowURL(ptr.TSLLocation); err != nil {
-		return nil, err
+
+	var prevT *trust.Territory
+	if prev != nil {
+		prevT = prev.Territory(code)
 	}
 
-	// P2 input-side change detection: when the sibling ".sha2" matches the digest
-	// stored last cycle and the territory is still within NextUpdate, reuse the
-	// previous (already-verified) data without re-downloading + re-verifying the
-	// full TL. The ".sha2" only decides whether to fetch — trust still comes from
-	// the XMLDSig verification below on anything we do download. A list past
-	// NextUpdate, with no stored digest, with no NextUpdate, or whose digest
-	// fetch fails always falls through to a full fetch (anti-freeze).
-	if prev != nil {
-		if prevT := prev.Territory(code); prevT != nil && prevT.SourceDigest != "" &&
-			prevT.NextUpdate != nil && !prevT.StaleAt(now, p.cfg.StaleGrace) {
-			if digest, derr := p.fetcher.FetchDigest(ctx, ptr.TSLLocation); derr == nil && digest == prevT.SourceDigest {
-				reused := *prevT
-				reused.CarriedOver = false // confirmed unchanged, not a fail-safe carry-over
-				reused.Anchors = append([]trust.Anchor(nil), prevT.Anchors...)
-				p.log.Debug("territory unchanged (.sha2 match) — skipped full fetch",
-					zap.String("territory", code), zap.String("digest", digest))
-				return &reused, nil
-			}
-		}
+	src := &nationalTLSource{
+		fetcher:          p.fetcher,
+		log:              p.log,
+		code:             code,
+		ptr:              ptr,
+		allowHTTP:        p.cfg.allowsHTTP(code),
+		acceptedStatuses: p.cfg.AcceptedStatuses,
+		acceptedTypes:    p.cfg.AcceptedServiceTypes,
+		now:              now,
+	}
+	var last *source.Raw
+	if prevT != nil {
+		src.hasPrev = true
+		src.prevSeq = prevT.TLSequence
+		src.prevFresh = prevT.SourceDigest != "" && prevT.NextUpdate != nil && !prevT.StaleAt(now, p.cfg.StaleGrace)
+		last = &source.Raw{Digest: prevT.SourceDigest, Sequence: prevT.TLSequence}
+	}
+
+	raw, err := src.Fetch(ctx, last)
+	if errors.Is(err, source.ErrUnchanged) {
+		reused := *prevT
+		reused.CarriedOver = false // confirmed unchanged, not a fail-safe carry-over
+		reused.Anchors = append([]trust.Anchor(nil), prevT.Anchors...)
+		return &reused, nil
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	signers, err := ptr.Certificates()
@@ -481,40 +419,26 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		return nil, fmt.Errorf("pointer certs for %s: %w", code, err)
 	}
 
-	raw, err := p.fetcher.Fetch(ctx, ptr.TSLLocation)
+	if _, err := src.Verify(ctx, raw, certsDER(signers)); err != nil {
+		return nil, err
+	}
+	anchors, err := src.Extract(nil)
 	if err != nil {
 		return nil, err
 	}
-	tl, err := tsl.VerifyAndParse(raw, signers)
-	if err != nil {
-		return nil, fmt.Errorf("territory %s: %w", code, err)
-	}
-
-	if tl.SchemeInformation.SchemeTerritory != code {
-		return nil, fmt.Errorf("territory %s: list declares SchemeTerritory %q", code, tl.SchemeInformation.SchemeTerritory)
-	}
-	if prev != nil {
-		if prevT := prev.Territory(code); prevT != nil && tl.SchemeInformation.TSLSequenceNumber < prevT.TLSequence {
-			return nil, fmt.Errorf("territory %s: sequence regression: %d < %d", code, tl.SchemeInformation.TSLSequenceNumber, prevT.TLSequence)
-		}
-	}
-
-	anchors, warnings, err := trust.ExtractAnchors(tl, code, p.cfg.AcceptedStatuses, p.cfg.AcceptedServiceTypes, now)
-	if err != nil {
-		return nil, err
-	}
-	for _, w := range warnings {
+	for _, w := range src.warnings {
 		p.log.Warn("skipped trust service during extraction",
 			zap.String("territory", code), zap.String("tsp", w.TSPName),
 			zap.String("service", w.ServiceName), zap.String("reason", w.Reason))
 	}
 
+	tl := src.list
 	t := &trust.Territory{
 		Code:         code,
 		TLSequence:   tl.SchemeInformation.TSLSequenceNumber,
 		IssueTime:    tl.SchemeInformation.ListIssueDateTime,
 		NextUpdate:   tl.SchemeInformation.NextUpdate.DateTime,
-		SourceDigest: sha256hex(raw), // == published .sha2; drives next cycle's skip (P2)
+		SourceDigest: raw.Digest, // == published .sha2; drives next cycle's skip
 		Anchors:      anchors,
 	}
 	// Stamp every TL-sourced anchor with the territory's TLSequence (T1:
