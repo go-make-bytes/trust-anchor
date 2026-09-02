@@ -261,7 +261,7 @@ A refresh answers with both halves of what it did — the declared reconcile and
   "snapshot": "7c25d7ad…",
   "changed": true,
   "declared": { "changed": true },
-  "cycle": { "ok": true, "territories": { "ok": 26, "failed": ["DE"] } }
+  "cycle": { "ok": true, "territories": { "ok": 30, "failed": ["PT"] } }
 }
 ```
 

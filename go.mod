@@ -101,7 +101,7 @@ require (
 	github.com/gmb-lib/go-sec-events v1.2.0
 	github.com/go-quicktest/qt v1.102.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/lafriks/go-xmldsig/v2 v2.3.0
+	github.com/lafriks/go-xmldsig/v2 v2.4.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
