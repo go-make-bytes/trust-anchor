@@ -1,14 +1,14 @@
 # trust-anchor
 
-The **EU trust-list ingester** for the platform: it fetches the EU **List of Trusted Lists (LOTL)** and the configured national **Trusted Lists** (ETSI TS 119 612), verifies their XML signatures against a pinned signer set, extracts the qualified CA certificates, and serves them as versioned, cacheable trust bundles over an authenticated HTTP API. It is the single place where "which certificate authorities does the EU currently trust" is answered for everything downstream — an operational realisation of the eIDAS trust framework (Regulation (EU) No 910/2014, in particular the Article 22 trusted-list obligation and its implementing acts).
+An **EU trusted-list ingester**. It fetches the EU **List of Trusted Lists (LOTL)** and the national **Trusted Lists** it points to (ETSI TS 119 612), verifies every list's XML signature against a pinned signer set, extracts the qualified CA certificates, and serves them as versioned, cacheable **trust bundles** over an authenticated HTTP API. It answers one question — *which certificate authorities does the EU currently trust, signature-verified* — and answers it the same way for every consumer. It is an operational realisation of the eIDAS trust framework (Regulation (EU) No 910/2014, in particular the Article 22 trusted-list obligation and its implementing acts).
 
-Its job is deliberately narrow. It turns a chain of externally published, XML-DSig-signed documents into a small, deterministic **trust snapshot** — a content-addressed set of trusted CA anchors plus the metadata consumers filter on (territory, use, QSCD qualification, and an additive EUDI anchor type) — and it hands that snapshot out. It does **not** validate end-entity certificates, run OCSP/CRL revocation, or make per-signature trust decisions: those live in the consuming services. trust-anchor answers exactly one question — *what is the current, signature-verified set of trust anchors* — and answers it the same way for every consumer.
+Its job is deliberately narrow. It turns a chain of externally published, XML-DSig-signed documents into a small, deterministic **trust snapshot** — a content-addressed set of trusted CA anchors plus the metadata consumers filter on (territory, use, QSCD qualification, and an additive EUDI anchor type) — and it hands that snapshot out. It does **not** validate end-entity certificates, run OCSP/CRL revocation, or make per-signature trust decisions: those belong to the consuming services.
 
-It is a **shared service with two independent consumers**. The eIDAS **signing platform** reads it for signing- and validation-trust (a Web eID CA file, signer-certificate validation, audit/evidence), and an **EUDI wallet verifier** reads it for relying-party/wallet trust (its `trust-cache-worker` materialises anchors into a cache that `eudi-verifier-core` reads). Neither consumer shares a filesystem or a database with this service — every consumer keeps its **own local cache** and refreshes it over the HTTP API ("Mode A"): no shared mount, no cross-service DB access. The one unacceptable failure mode is serving **unverified** anchors; serving *slightly old* verified anchors is by design fine (fail-safe: keep the last good snapshot and raise a security event).
+**Who consumes it.** Anything that must know which CAs the EU trusts without parsing and verifying trusted lists itself: a signature- or seal-validation service building certificate chains, an eID authentication gateway that needs a CA file for card certificates, a wallet relying party (an EUDI verifier) resolving issuer and wallet-provider trust, an audit or evidence store recording which trust set was in force. Every consumer keeps its **own local cache** and refreshes it over the HTTP API — the service shares no filesystem and no database with anyone. The one unacceptable failure mode is serving **unverified** anchors; serving *slightly old* verified anchors is by design fine (fail-safe: keep the last good snapshot and raise a security event).
 
-It renders no human UI. It is an Azugo service; cross-cutting concerns (tracing, log redaction, correlation, metrics) are installed once by the platform kit.
+It renders no human UI. It is written in Go on the [Azugo](https://azugo.io) web framework; structured logging, tracing, metrics and log redaction come from [go-platform-kit](https://github.com/gmb-lib/go-platform-kit), security events from [go-sec-events](https://github.com/gmb-lib/go-sec-events), inbound DPoP token validation from [go-authbyte](https://github.com/gmb-lib/go-authbyte), and XML-DSig verification from [go-xmldsig](https://github.com/lafriks/go-xmldsig). All are public Go modules fetched at their tags.
 
-The standards and legal acts cited here and in the source — with the exact editions the claims were checked against — are pinned in [`SPECREFS.md`](SPECREFS.md).
+The standards and legal acts cited here and in the source — with the exact editions the claims were checked against — are pinned in [`SPECREFS.md`](SPECREFS.md). Changes per release are in [`CHANGELOG.md`](CHANGELOG.md).
 
 ---
 
@@ -18,44 +18,68 @@ trust-anchor is the boundary between the EU's published trust lists and every se
 
 ```mermaid
 flowchart LR
-    subgraph UP["EU trust sources — https-only, TLS-verified, size-capped"]
+    subgraph UP["EU trust publications — https-only, TLS-verified, size-capped"]
         direction TB
         LOTL["EU LOTL + pivot chain<br/>(ETSI TS 119 612)"]
-        LV["national Trusted List (LV)"]
-        EE["national Trusted List (EE)"]
+        NTL["national Trusted Lists<br/>(the configured territories,<br/>or every LOTL-listed one via the EU group)"]
     end
+
+    BOOT[["operator-pinned LOTL signer set<br/>(baked lotl-signers.yaml)"]]
+    DECL[["operator-declared anchors<br/>(INTERNAL_TRUST_SOURCE, optional)"]]
 
     TA["trust-anchor<br/>(this service)<br/>fetch · verify · extract · snapshot · serve"]
 
-    subgraph SIGN["eIDAS signing platform"]
+    subgraph DOWN["consumers — each with its own cache and refresh loop"]
         direction TB
-        WEBEID["web-eid service<br/>(CA file contract)"]
-        SIGVAL["signer-cert validation<br/>· audit / evidence"]
+        VAL["signature / seal validation<br/>(chain building, revocation)"]
+        AUTH["eID authentication gateway<br/>(PEM CA file)"]
+        RP["wallet relying party / verifier<br/>(typed EUDI anchors)"]
+        AUD["audit / evidence<br/>(which snapshot was in force)"]
     end
 
-    subgraph EUDI["EUDI wallet verifier"]
-        direction TB
-        TCW["trust-cache-worker<br/>syncs anchors → cache"]
-        VC["eudi-verifier-core<br/>reads warm cache"]
-    end
-
-    OPS["operator / ops tooling<br/>(trust:admin)"]
-    SIEM[["SIEM"]]
+    OPS["operator tooling<br/>(trust:admin)"]
+    LOG[["structured log / SIEM"]]
 
     LOTL --> TA
-    LV --> TA
-    EE --> TA
-    BOOT[["operator-pinned LOTL signer set<br/>(baked lotl-signers.yaml)"]] --> TA
+    NTL --> TA
+    BOOT --> TA
+    DECL --> TA
 
-    TA -->|"GET /v1/anchors (PEM, ETag) · 304"| WEBEID
-    TA -->|"GET /v1/anchors.json (typed)"| SIGVAL
-    TA -->|"GET /v1/anchors.json (typed) · ETag poll"| TCW
-    TCW --> VC
+    TA -->|"GET /v1/anchors.json · ETag poll"| VAL
+    TA -->|"GET /v1/anchors (PEM) · 304"| AUTH
+    TA -->|"GET /v1/anchors.json?type=…"| RP
+    TA -->|"GET /v1/snapshot"| AUD
     OPS -->|"approve pending · refresh"| TA
-    TA -->|"security events"| SIEM
+    TA -->|"security events"| LOG
 ```
 
 Division of labour: trust-anchor owns the *upstream* half — fetching, XML-DSig verification against pinned signers, anchor extraction, snapshot versioning and change governance — and serves an immutable, ETag-identified snapshot. Each consumer owns the *downstream* half — its own poll cadence, its own cache, and every per-certificate decision (chain building, revocation, signature verification) it makes with the anchors. The two meet only at the authenticated HTTP bundle endpoint and its `ETag` / `If-None-Match` contract; there is no shared state between them.
+
+---
+
+## Running it
+
+The container image is published at **`ghcr.io/go-make-bytes/trust-anchor`** — `vX.Y.Z` tags for GitHub Releases, `latest` for the `main` branch, `develop`, and `sha-<short>` per commit. Every image is built once, given an SBOM, scanned for HIGH/CRITICAL vulnerabilities, signed with cosign (keyless, GitHub OIDC) and only then pushed; a release tag is a retag of the already-signed digest, never a rebuild. The image is `scratch`-based and starts `/server web` on port 8080 with the pinned LOTL signer set baked in, so a first run needs no trust configuration at all.
+
+The smallest useful deployment — one node, a filesystem snapshot store, the network-trusted auth mode:
+
+```sh
+mkdir -p trust-anchor-data
+docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
+  -e SERVICE_NAME=trust-anchor \
+  -e AUTH_MODE=internal -e TRUST_ADMIN_KEY=change-me \
+  -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v "$PWD/trust-anchor-data:/var/lib/trust-anchor" \
+  -e TRUST_TERRITORIES=EU \
+  ghcr.io/go-make-bytes/trust-anchor:latest
+
+curl -s localhost:8080/readyz                       # 503 until the first cycle completes (about a minute for the EU group), then 200
+curl -s localhost:8080/v1/snapshot | head -c 400    # the served snapshot, per-territory outcomes
+curl -s "localhost:8080/v1/anchors?use=signature" -o eu-signature-cas.pem
+```
+
+Two things the command carries on purpose. `SERVICE_NAME` is required by the base configuration — the process refuses to start without it. And the image runs as an unprivileged user (uid 1000), so the snapshot directory must be writable by whoever the container runs as: the `--user` flag above makes that the invoking user of a bind-mounted directory. With a named volume instead, initialise its ownership once (`docker run --rm -v trust-anchor-data:/data alpine chown 1000:1000 /data`) — a fresh volume is created root-owned, and the service then fails at start with `mkdir …/bootstrap: permission denied`.
+
+For anything shared or multi-instance: an S3-compatible bucket or Postgres as the snapshot store, `AUTH_MODE=dpop` in front of an OAuth 2.0 issuer, and the security events wired to your log pipeline — all below.
 
 ---
 
@@ -75,12 +99,12 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 
 **Bundle filters** (shared by both `/v1/anchors*` routes, all optional):
 
-- `territory=LV,EE` — comma-separated ISO 3166-1 alpha-2 codes; default all.
+- `territory=DE,FR` — comma-separated ISO 3166-1 alpha-2 codes; default all.
 - `use=signature | authentication | seal | website` — mapped from the service's `AdditionalServiceInformation` URIs (`ForeSignatures` / `ForeSeals` / `ForWebSiteAuthentication`, [ETSI TS 119 612 V2.4.1 §5.5.9.4]); a service with no such qualifier is included in **all** uses (the TS 119 612 default). `authentication` is served as an alias of `signature` (eID authentication certificates chain to the same CA/QC services, and TS 119 612 defines no distinct authentication qualifier). `website` maps the QWAC qualifier.
 - `qscdOnly=true` — restrict to `QCWithQSCD`-qualified services.
 - `type=<eudi-anchor-type>` — **additive** filter selecting a typed EUDI anchor (see [The internal trust source](#the-internal-trust-source--operator-declared-eudi-anchors)); omitted means legacy untyped CA/QC anchors only. Unknown values are rejected (fail closed).
 
-An unknown `use` or `type` value returns a 400 parameter error; a request before the first snapshot exists returns 503.
+An unknown `use` or `type` value returns a 422 validation error; a request before the first snapshot exists returns 503.
 
 ---
 
@@ -91,7 +115,7 @@ An unknown `use` or `type` value returns a 400 parameter error; a request before
 ```mermaid
 flowchart TB
     subgraph App["App (app.go) — built once by New()"]
-        INIT["init(): platform setup → events →<br/>snapshot store → fetcher + pipeline + manager →<br/>inbound auth → refresh task"]
+        INIT["init(): framework setup → events →<br/>snapshot store → fetcher + sources + pipeline + manager →<br/>inbound auth → refresh task"]
     end
 
     subgraph Routes["routes/ — HTTP handlers"]
@@ -103,8 +127,8 @@ flowchart TB
 
     subgraph Ingest["ingest/ — one cycle, stateless between cycles"]
         FET["fetcher — https allow-list, size cap, timeout"]
-        PIP["pipeline — LOTL → pivots → national TLs →<br/>extract → snapshot → hold governance"]
-        PIV["pivot — signer-set rotation walk"]
+        SRC["source adapters — EU LOTL (+ pivot walk) ·<br/>national TL (+ .sha2 skip): fetch → verify → extract"]
+        PIP["pipeline — orchestration: LOTL → national TLs →<br/>declared anchors → snapshot → hold governance"]
         MGR["manager — active snapshot (atomic), fail-safe swap"]
     end
 
@@ -121,25 +145,26 @@ flowchart TB
     end
 
     subgraph Store["store/ — versioned snapshots + bootstrap"]
-        S3[("s3 (default)")]
+        S3[("s3")]
         FS[("fs / memory (dev/test)")]
         PG[("postgres — SECURITY DEFINER procs")]
     end
 
     TASK["tasks/refresh — timer · NextUpdate · admin kick"]
-    EV["events — go-sec-events → SIEM"]
+    EV["events — security events → log / SIEM"]
 
     Routes --> App
     AN & SN --> MGR
     AD --> MGR
     App --> Ingest & Store & EV & TASK
-    PIP --> FET & PIV & TSL & Trust
+    PIP --> SRC & Trust
+    SRC --> FET & TSL
     MGR <--> Store
     PIP --> EV
     TASK -. kick .-> MGR
 ```
 
-Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification (via `lafriks/go-xmldsig/v2`) · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`source/`](source) the per-source-type adapter contract (fetch → verify → extract) · [`ingest/`](ingest) fetcher, the source adapters (EU LOTL incl. the pivot walk, national TLs incl. the ".sha2" change-detection), pipeline orchestration, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission.
+Package map: [`tsl/`](tsl) TS 119 612 parsing + enveloped XML-DSig verification · [`trust/`](trust) the domain model (anchors, snapshots, diff, filters, internal source, bootstrap) · [`source/`](source) the per-source-type adapter contract (fetch → verify → extract; one adapter per kind of list) · [`ingest/`](ingest) the fetcher, the two list adapters in use (EU LOTL including the pivot walk; national TLs including the `.sha2` change-detection), pipeline orchestration, active-snapshot manager · [`store/`](store) S3 / filesystem / memory / Postgres snapshot stores · [`tasks/`](tasks) the refresh loop · [`routes/`](routes) the HTTP API · [`events/`](events) security-event emission.
 
 ### Ingest → verify → snapshot → serve
 
@@ -207,7 +232,7 @@ The signer set is layered:
 
 ### The internal trust source — operator-declared EUDI anchors
 
-The EU has not yet published machine-readable trust lists for the newer EUDI actor types (PID providers, wallet providers, Access CAs, WRPRC issuers, (Q)EAA providers, status-list signers). Until it does, an operator running a real private trust ecosystem can declare those anchors directly via `INTERNAL_TRUST_SOURCE` (a YAML file; unset = feature off, zero behaviour change). The whole consuming fleet then resolves them through the same API, snapshots, ETags, staleness and events as TL-sourced anchors, and reads them back through the additive `type=` filter. A worked example lives at [`examples/internal-trust.yaml`](examples/internal-trust.yaml).
+The EU has not yet published machine-readable trust lists for the newer EUDI actor types (PID providers, wallet providers, Access CAs, WRPRC issuers, (Q)EAA providers, status-list signers). Until it does, an operator running a real private trust ecosystem can declare those anchors directly via `INTERNAL_TRUST_SOURCE` (a YAML file; unset = feature off, zero behaviour change). Every consumer then resolves them through the same API, snapshots, ETags, staleness and events as TL-sourced anchors, and reads them back through the additive `type=` filter. The closed type vocabulary is `pid_provider` · `qeaa_provider` · `pub_eaa_provider` · `eaa_provider` · `wallet_provider` · `access_ca` · `wrprc_issuer` and the four `*_status` signer types (`pid_provider_status`, `qeaa_provider_status`, `pub_eaa_provider_status`, `eaa_provider_status`). A worked example lives at [`examples/internal-trust.yaml`](examples/internal-trust.yaml).
 
 Trust posture: an internal anchor carries the **same posture as the pinned bootstrap** — each declared certificate is trusted directly, with no signature chain behind it. The file *is* the security boundary; treat it as key material (ownership, review, change control). Entries activate immediately and bypass hold mode — deploying the file is the operator's approval. Loading is **fail-closed at whole-file granularity**: any invalid entry (unknown type, bad territory, wrong number of certificate sources, unparseable or expired certificate, duplicate fingerprint) rejects the entire file for that cycle, naming the offending entry by name and fingerprint — never by file contents. A bad edit after the first run carries the previous internal set over and raises `trust.internal_source_error`. The file is re-read **at boot** (the restored snapshot is reconciled against the file as it is now) and **on every refresh cycle** — and both work with the trusted-list upstream unreachable, which is exactly when a declared CA is most urgently needed. There is no file-watcher, so the operating habit is: **edit → `POST /v1/refresh` (or restart) → confirm the snapshot id changed** (`GET /v1/snapshot`). The refresh response reports the declared half explicitly (`declared.changed`, plus `carriedOver` + `error` when the load failed), so an upstream outage can never mask what happened to the declared set. One gotcha worth knowing: change detection is fingerprint-based, so a **metadata-only edit** (an entry's `name` or `territory` label) is silently a no-op — served `serviceName` comes from the certificate subject, not the declaration; to change what is served, add or remove a certificate. The parser is fuzzed and must never panic on malformed input.
 
@@ -221,18 +246,18 @@ Trust posture: an internal anchor carries the **same posture as the pinned boots
 
 trust-anchor persists exactly two kinds of object, each versioned with a "latest" pointer: the **trust snapshot** (content-addressed by its `id`) and the **bootstrap** signer set. The active snapshot is held in memory behind an atomic pointer and re-read from the store on restart. There is intentionally no per-anchor relational schema — the dataset is tens of certificates plus metadata.
 
-The store backend is derived from configuration (`store.StoreBackend`):
+The store backend is derived from configuration:
 
 | Backend | Selected by | Use |
 |---|---|---|
 | **postgres** | `TRUST_STORE_DSN` set (takes precedence) | Scaled / multi-instance deployments. Pool size comes from the DSN itself — `pool_max_conns` (pgx reads it and strips it before Postgres sees it; its default is the host's CPU count): set it explicitly to the deployment's connection budget, e.g. `?sslmode=…&pool_max_conns=4&pool_min_conns=1`. |
-| **s3** | `TRUST_SNAPSHOT_BUCKET` set | Platform default (S3-API object storage) |
-| **fs** | `TRUST_SNAPSHOT_DIR` set | Local development |
+| **s3** | `TRUST_SNAPSHOT_BUCKET` set | Any S3-compatible object storage |
+| **fs** | `TRUST_SNAPSHOT_DIR` set | Single-node deployments and local development |
 | **memory** | none of the above | Tests only — snapshots do not survive a restart |
 
-The **Postgres** backend never touches tables directly. It reaches the platform `trust_anchor` schema **only** through `SECURITY DEFINER` procedures (`trust_anchor.save_snapshot` / `load_latest_snapshot` / `save_bootstrap` / `load_latest_bootstrap`), passing and receiving a uniform JSONB envelope; the marshalled snapshot is the stored source of truth. The service connects as the **`EXECUTE`-only `trust_anchor_public` role** — it holds no table privileges, so a bug or injection cannot read or write rows outside the procedure contract. A procedure that fails after a write re-raises a structured error to force a rollback, which the store decodes back into the same typed error shape as the validation path. The DSN carries a password, so it is sourced from a mounted secret (see `TRUST_STORE_DSN_FILE` below), never an inline SQL literal.
+The **Postgres** backend never touches tables directly. It reaches a dedicated `trust_anchor` schema **only** through four `SECURITY DEFINER` procedures — `trust_anchor.save_snapshot`, `load_latest_snapshot`, `save_bootstrap`, `load_latest_bootstrap` — each with the uniform signature `(pi_data jsonb, INOUT po_data jsonb)`: the marshalled snapshot or bootstrap goes in as `pi_data` and is stored verbatim (key columns are projected from it), and a structured success-or-error envelope comes back. The service connects as an **`EXECUTE`-only role** (`trust_anchor_public`) that holds no table privileges, so a bug or injection cannot read or write rows outside the procedure contract. A procedure that fails after a write re-raises a structured error to force a rollback, which the store decodes back into the same typed error shape as the validation path. The service does **not** create the schema: a reference implementation — Flyway migrations for the two versioned tables, the four procedures, the role grants, and the small `util` schema they use for the result envelope — is published in the [signbyte-database](https://github.com/signbyte/signbyte-database/tree/HEAD/migrations/trust_anchor) repository and can be applied as-is or ported to your own migration tooling. The DSN carries a password, so it is sourced from a mounted secret (see `TRUST_STORE_DSN_FILE` below), never an inline literal.
 
-trust-anchor keeps **no Valkey/Redis of its own** — caching is the consumer's responsibility (the EUDI verifier's `trust-cache-worker` maintains the warm cache that `eudi-verifier-core` reads; the web-eid consumer keeps a PEM file). trust-anchor's contribution to that model is the stable `ETag` (= snapshot id) that lets every consumer poll cheaply and refresh only on real change.
+trust-anchor keeps **no cache layer of its own** (no Redis/Valkey) — caching is the consumer's responsibility. Its contribution to that model is the stable `ETag` (= snapshot id) that lets every consumer poll cheaply and refresh only on real change.
 
 ---
 
@@ -240,17 +265,28 @@ trust-anchor keeps **no Valkey/Redis of its own** — caching is the consumer's 
 
 `AUTH_MODE` selects the `/v1` inbound authentication strategy; the routes and the `trust:read` / `trust:admin` scope checks are identical in both modes.
 
-- **`AUTH_MODE=dpop`** (default) — DPoP-bound service tokens validated by the platform auth client, audience `svc:trust-anchor`. `trust:read` is granted to bundle consumers; `trust:admin` to ops tooling only. Configured via `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` and the standard `DPOP_*` variables.
+- **`AUTH_MODE=dpop`** (default) — every `/v1` request carries an OAuth 2.0 access token sender-constrained with a DPoP proof ([IETF RFC 9449]). The token is validated by the go-authbyte client against the issuer named in `AUTH_ISSUER_URL` (signature via the issuer's JWKS, audience `SERVICE_AUDIENCE`, DPoP proof binding, nonce and replay checks), and the `trust:read` / `trust:admin` scopes are read from it. Grant `trust:read` to bundle consumers and `trust:admin` to operator tooling only. Configuration:
+
+  | Env var | Default | Meaning |
+  |---|---|---|
+  | `AUTH_ISSUER_URL` | — | The OAuth 2.0 / OpenID issuer that mints the access tokens (required in this mode) |
+  | `SERVICE_AUDIENCE` | — | The audience a token must carry to be accepted here; `svc:trust-anchor` by convention (required) |
+  | `AUTH_JWKS_URL` | derived from the issuer | Override of the JWKS location |
+  | `AUTH_JWKS_CACHE_TTL` | `10m` | How long fetched signing keys are cached; an unknown `kid` triggers a refetch regardless |
+  | `DPOP_PROOF_MAX_AGE` | `60s` | Maximum age of a DPoP proof's `iat` |
+  | `DPOP_NONCE_ENABLED` / `DPOP_NONCE_TTL` | `true` / `5m` | Server-provided DPoP nonces and their lifetime |
+  | `DPOP_REPLAY_BACKEND` | `memory` | Where seen DPoP proof ids are remembered for replay detection: `memory` (single instance) or `redis` (shared across instances) |
+
 - **`AUTH_MODE=internal`** — for co-located, network-trusted deployments (same namespace / encrypted overlay) where a full token issuer is unnecessary. Read endpoints are anonymous (every request is granted `trust:read`); admin endpoints additionally require a header `X-API-Key: $TRUST_ADMIN_KEY`, compared in constant time. A missing or wrong key is denied through the *same* scope-denial path as any other 403 (identical response body modulo the per-request trace id — no oracle). Boot **fails closed**: `AUTH_MODE=internal` with an empty `TRUST_ADMIN_KEY` refuses to start, and no DPoP configuration is consulted at all in this mode. The admin key is a secret — required, never logged, never echoed in an error.
 
 ```sh
 # dpop (default): a bundle consumer polls with a DPoP-bound token
-curl -H "Authorization: Bearer $TOKEN" -H "DPoP: $PROOF" \
-     "https://trust-anchor:8080/v1/anchors?territory=LV&use=signature"
+curl -H "Authorization: DPoP $TOKEN" -H "DPoP: $PROOF" \
+     "https://trust-anchor.example:8080/v1/anchors?territory=EU&use=signature"
 
 # internal: reads are anonymous; admin needs the key
-curl "https://trust-anchor:8080/v1/anchors.json?type=access_ca"
-curl -X POST -H "X-API-Key: $TRUST_ADMIN_KEY" "https://trust-anchor:8080/v1/refresh"
+curl "https://trust-anchor.example:8080/v1/anchors.json?type=access_ca"
+curl -X POST -H "X-API-Key: $TRUST_ADMIN_KEY" "https://trust-anchor.example:8080/v1/refresh"
 ```
 
 A refresh answers with both halves of what it did — the declared reconcile and the upstream cycle
@@ -272,29 +308,28 @@ the error; `territories` is omitted — a failed cycle produced no per-territory
 
 ## Consuming a bundle
 
-A consumer keeps its own cache and refreshes over the API on an interval, using the strong `ETag` to avoid re-downloading unchanged data. The Web eID service, for example, keeps go-web-eid's file contract (`WEBEID_TRUSTED_CA_CERTS_PATH` — a PEM file or directory):
+A consumer keeps its own cache and refreshes over the API on an interval, using the strong `ETag` to avoid re-downloading unchanged data. The simplest consumer is anything that reads CA certificates from a PEM file or directory — most TLS stacks, eID authentication libraries and signature validators do:
 
 ```sh
-# initial fetch of the LV signature anchors into the trust directory
-curl -H "Authorization: Bearer $TOKEN" -H "DPoP: $PROOF" \
-     -o /etc/webeid/trust/lv-anchors.pem \
-     "https://trust-anchor:8080/v1/anchors?territory=LV&use=signature"
-export WEBEID_TRUSTED_CA_CERTS_PATH=/etc/webeid/trust/
+# initial fetch of the signature-use anchors for two territories into the consumer's trust directory
+curl -H "Authorization: DPoP $TOKEN" -H "DPoP: $PROOF" \
+     -o /etc/myservice/trust/eu-anchors.pem \
+     "https://trust-anchor.example:8080/v1/anchors?territory=DE,FR&use=signature"
 ```
 
-Then poll with `If-None-Match: "<last ETag>"`: a `304` means nothing to do; a `200` means write the new bundle and reload the consumer. On any error, keep the existing file — the consumer applies the same fail-safe the service does upstream, and treats `X-Trust-Stale: true` as a monitoring signal, not an error. Demo/test CAs that never appear in production TLs are declared in the `INTERNAL_TRUST_SOURCE` file as entries without a `type:` (or with the explicit `tsl_ca` alias) and arrive in the same untyped bundle tagged `source: internal`. Typed EUDI anchors are read back with the `type=` filter, e.g. `?type=pid_provider&territory=LV`.
+Then poll with `If-None-Match: "<last ETag>"`: a `304` means nothing to do; a `200` means write the new bundle and reload the consumer. On any error, keep the existing file — the consumer applies the same fail-safe the service does upstream, and treats `X-Trust-Stale: true` as a monitoring signal, not an error. Demo/test CAs that never appear in production TLs are declared in the `INTERNAL_TRUST_SOURCE` file as entries without a `type:` (or with the explicit `tsl_ca` alias) and arrive in the same untyped bundle tagged `source: internal`. Typed EUDI anchors are read back with the `type=` filter, e.g. `?type=pid_provider&territory=EU`.
 
 ---
 
 ## Configuration
 
-Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METRICS_ENABLED`, `OTEL_*`) comes from the shared base configuration, plus:
+Server, logging, metrics and tracing settings are the framework's base configuration — `SERVER_URLS`, `ENVIRONMENT`, `SERVICE_NAME` (required), `LOG_LEVEL` / `LOG_FORMAT`, `METRICS_ENABLED` / `METRICS_PATH` / `METRICS_TRUSTED_IPS`, `OTEL_EXPORTER_OTLP_ENDPOINT` and the other standard `OTEL_*` variables. The service's own settings:
 
 | Env var | Default | Meaning |
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists location |
 | `LOTL_BOOTSTRAP_CERTS_PATH` | baked `/etc/trust-anchor/lotl-signers.yaml` | Operator-pinned LOTL signer set — the first-install seed (a `lotl-signers.yaml` manifest carrying its own OJ reference, or a PEM/DER file/dir). The image bakes a default; after first install the persisted store is authoritative and this path is ignored |
-| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed |
+| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed. Most deployments want `EU` |
 | `TRUST_ALLOW_HTTP_TERRITORIES` | *(empty)* | Territories whose trusted list may be fetched over its published plain-http pointer (e.g. `SK`). Default empty = https required. Integrity comes from the XMLDSig verification against the LOTL-pinned signers, never from transport; this waives only the defense-in-depth https rule, per named territory, with a loud log line per cycle. Never applies to the LOTL itself |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | Accepted service statuses (short names or full TS 119 612 URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence; the earliest TL `NextUpdate` is honoured too |
@@ -302,15 +337,15 @@ Standard fleet env (`SERVER_URLS`, `SERVICE_NAME`, `ENVIRONMENT`, `LOG_*`, `METR
 | `TRUST_HOLD_AUTO_RELEASE` | `72h` | Hold-mode auto-release window |
 | `TRUST_STALE_GRACE` | `24h` | Grace past `NextUpdate` before data is flagged stale |
 | `TRUST_SERVICE_TYPES` | `CA/QC` | Accepted trusted-list service types (comma-separated registered Svctype URIs or shorthand suffixes). Services of other types are counted and reported, never silently dropped. Each accepted type must have a serving route (a bundle the anchors can be requested through) or boot fails. National-level types are matched against the national status vocabulary (`recognisedatnationallevel` for `granted`, `deprecatedatnationallevel` for `withdrawn`) — the qualified and national planes never share status values |
-| `INTERNAL_TRUST_SOURCE` | — | The operator declaration file (YAML): typed EUDI actor anchors AND untyped card/QC CA declarations (no `type:`, or the `tsl_ca` alias). Parsed fail-closed at whole-file granularity; a bad edit carries the previous set over (`trust.internal_source_error`). Bypasses hold mode — deploying the file is the approval |
+| `INTERNAL_TRUST_SOURCE` | — | The operator declaration file (YAML): typed EUDI actor anchors AND untyped CA declarations (no `type:`, or the `tsl_ca` alias). Parsed fail-closed at whole-file granularity; a bad edit carries the previous set over (`trust.internal_source_error`). Bypasses hold mode — deploying the file is the approval |
 | `TRUST_EXTRA_ANCHORS_PATH` | **retired** | The manual overlay is gone. A deployment still setting this fails boot with a migration pointer — refusing to start beats silently not serving anchors the operator expects. Declare the same certificates in `INTERNAL_TRUST_SOURCE` instead |
-| `TRUST_SNAPSHOT_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_PREFIX` / `_USE_SSL` | — / — / — / — / — / `true` | S3-API snapshot store (platform standard); `_ENDPOINT` is required when a bucket is set |
-| `TRUST_SNAPSHOT_DIR` | — | Filesystem snapshot store (development) |
+| `TRUST_SNAPSHOT_BUCKET` / `_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_PREFIX` / `_USE_SSL` | — / — / — / — / — / `true` | S3-compatible snapshot store; `_ENDPOINT` is required when a bucket is set |
+| `TRUST_SNAPSHOT_DIR` | — | Filesystem snapshot store (single node / development) |
 | `TRUST_STORE_DSN` | — | PostgreSQL backend DSN — reached via `SECURITY DEFINER` procedures as the `EXECUTE`-only `trust_anchor_public` role. **Takes precedence** over S3/FS/memory. Secret: supports the `TRUST_STORE_DSN_FILE` convention (a mounted file; an explicit plain value still overrides it) |
 | `TRUST_FETCH_TIMEOUT` | `30s` | Per-fetch timeout |
 | `MAX_TL_BYTES` | `20MiB` | Response size cap on any trusted-list fetch |
 | `AUTH_MODE` | `dpop` | `dpop` \| `internal` (see [Auth modes](#auth-modes)) |
-| `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` | — / `svc:trust-anchor` | Inbound DPoP validation (plus standard `DPOP_*` vars); consulted only when `AUTH_MODE=dpop` |
+| `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` / `AUTH_JWKS_*` / `DPOP_*` | see [Auth modes](#auth-modes) | Inbound token validation; consulted only when `AUTH_MODE=dpop` |
 | `TRUST_ADMIN_KEY` | — | `AUTH_MODE=internal` only: the `X-API-Key` value that grants `trust:admin`. **Secret** — required (boot fails closed if empty), never logged. Supports the `TRUST_ADMIN_KEY_FILE` convention |
 
 Upstream egress is confined to exactly the LOTL host and the TL hosts discovered from the *verified* LOTL — https only, TLS verified, size-capped. Any non-https pointer raises `egress.violation` and that territory falls back to its last good data (or a failed entry when it has none). One narrow, explicit exception: a territory named in `TRUST_ALLOW_HTTP_TERRITORIES` may be fetched over its published plain-http pointer (Slovakia's LOTL pointer is http, and its https alternative serves a wrong-hostname certificate). List **integrity never rests on transport** — every fetched list is XMLDSig-verified against the LOTL-pinned signers before anything trusts it — so the opt-in waives only the defense-in-depth transport rule, per named territory, logged loudly on every cycle. It can never apply to the LOTL itself.
@@ -319,13 +354,16 @@ Upstream egress is confined to exactly the LOTL host and the TL hosts discovered
 
 ## Observability and security events
 
-Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics) is installed by the platform kit via `platform.Setup`; upstream fetches run through an instrumented HTTP transport so LOTL and national-TL requests appear as client spans. The service's operationally meaningful signals split three ways, each in the medium that fits it: **freshness and volume are metrics** (the alerting layer — see below), **identity is the API** (`GET /v1/snapshot` names the served snapshot; the snapshot id is deliberately never a metric label, because ids churn a new time series per value), and **transitions and detail are structured log events** — security events emitted through `go-sec-events` to the SIEM stream (mirrored to the service log for background-task emissions where no request context exists), plus the trust-inventory line described after them.
+Cross-cutting observability (structured logging, OpenTelemetry tracing, metrics) is installed by the go-platform-kit library; upstream fetches run through an instrumented HTTP transport so LOTL and national-TL requests appear as client spans. The service's operationally meaningful signals split three ways, each in the medium that fits it: **freshness and volume are metrics** (the alerting layer — see below), **identity is the API** (`GET /v1/snapshot` names the served snapshot; the snapshot id is deliberately never a metric label, because ids churn a new time series per value), and **transitions and detail are structured log events** — security events emitted through go-sec-events into the structured log stream your SIEM or log pipeline consumes (background-task emissions, which have no request context, are written to the service log in the same shape), plus the trust-inventory line described after them.
 
 ### Metrics
 
-Registered on the same process-wide registry the HTTP server serves at the metrics endpoint, so
-`curl :PORT/metrics` works on a bare box during an incident. All label values are low-cardinality
-by construction (source tags, territory codes, the closed anchor-type taxonomy).
+Registered on the process-wide registry the HTTP server exposes at `/metrics` (`METRICS_PATH`) on
+the same port — answered only to callers listed in `METRICS_TRUSTED_IPS` (default `127.0.0.1`;
+semicolon-separated IPs or CIDRs, `*` for any), so on the box itself `curl localhost:8080/metrics`
+works during an incident, while a scraper on another host needs its address listed. All label
+values are low-cardinality by construction (source tags, territory codes, the closed anchor-type
+taxonomy).
 
 | Metric | Type | Meaning |
 |---|---|---|
@@ -371,7 +409,7 @@ from outside:
 The table above is the catalogue; this is the operating guidance. A trust service fails in a way
 that looks like success — it keeps answering, with data that is old, incomplete, or carried over
 from before an operator's edit. **Nothing here surfaces as an error to a caller**, so if these
-events are not watched, the first symptom is a citizen's card that will not authenticate, or a
+events are not watched, the first symptom is an eID card that will not authenticate, or a
 signature validated against a certificate authority that was withdrawn weeks ago.
 
 Alert on these — each one means trust decisions are being made on data you would not choose:
@@ -391,18 +429,18 @@ Review, do not alert:
 | `trust.pending_approved` | A held addition became active, and whether a human or the auto-release did it. |
 | `authz.denied` | Occasional entries are normal (a misconfigured client). A sustained pattern from one caller is worth understanding. |
 
-Two operating notes that are easy to learn the hard way:
+Three operating notes that are easy to learn the hard way:
 
 - **A first ingest emits many `trust.anchor_change` events at warning severity.** That is a populated
   bundle, not an incident. Alert on the *rate after steady state*, not on presence.
 - **Background events carry no request correlation id**, because refresh cycles run outside any
   request. They are written to the service log in the same structured shape as request-scoped
   events, so they are searchable by event type — just not joinable to a caller.
-- **Some trusted-list hosts are picky about the client.** The EE list host (`sr.riik.ee`) returns
+- **Some trusted-list hosts are picky about the client.** At least one national list host returns
   403 to Go's default User-Agent while serving browsers fine, so the fetcher sends an identifying
-  `User-Agent: trust-anchor/1.0 (eSignature-Portal trusted-list ingester)`. And at least one LOTL
-  pointer has used a plain `http://` location — the https-only egress rule correctly refuses such
-  a territory if it is ever configured; that refusal is the guard working, not a bug.
+  `trust-anchor/1.0` User-Agent. And at least one LOTL pointer has used a plain `http://`
+  location — the https-only egress rule correctly refuses such a territory unless it is named in
+  `TRUST_ALLOW_HTTP_TERRITORIES`; that refusal is the guard working, not a bug.
 
 If logs are collected with Loki, the whole stream for this service is:
 
@@ -426,11 +464,15 @@ trust-anchor/
 │   ├── admin.go                 — approve pending · refresh (trust:admin)
 │   └── response/                — API response DTOs
 ├── ingest/                      — one ingestion cycle
-│   ├── fetcher.go               — https allow-list, size cap, timeout, .sha2 skip
-│   ├── pipeline.go              — LOTL → pivots → national TLs → snapshot → hold
+│   ├── fetcher.go               — https allow-list, size cap, timeout, .sha2 digest fetch
+│   ├── source_lotl.go           — EU LOTL adapter (fetch → verify → pivot walk → extract pointers)
+│   ├── source_national.go       — national TL adapter (.sha2 skip → fetch → verify → extract)
+│   ├── pipeline.go              — orchestration: LOTL → national TLs → declared → snapshot → hold
 │   ├── pivot.go                 — LOTL pivot-chain signer rotation
 │   ├── manager.go               — active snapshot (atomic), fail-safe swap, approvals
+│   ├── inventory.go             — the trust-inventory log line
 │   └── oj.go                    — advertised OJ reference (observability signal)
+├── source/                      — the per-source-type adapter contract (Source, RegistrySource)
 ├── tsl/                         — ETSI TS 119 612
 │   ├── parse.go, types.go       — trusted-list parsing
 │   └── verify.go                — enveloped XML-DSig vs pinned signers
@@ -443,11 +485,10 @@ trust-anchor/
 │   └── internal.go              — operator-declared EUDI anchors (fail-closed)
 ├── store/                       — s3 / fs / memory / postgres snapshot stores
 ├── tasks/refresh.go             — refresh loop (interval · NextUpdate · admin kick)
-├── events/                      — go-sec-events emission
-├── source/                      — multi-source adapter contract (scaffold only)
+├── events/                      — security-event emission
 ├── trust-config/                — pinned lotl-signers.yaml + generator + provenance
 ├── examples/internal-trust.yaml — worked internal-trust-source example
-├── testdata/                    — recorded LOTL + pivots + LV/EE TLs (hermetic tests)
+├── testdata/                    — recorded LOTL + pivots + national TLs (hermetic tests)
 └── Dockerfile                   — scratch image; bakes lotl-signers.yaml
 ```
 
@@ -468,13 +509,14 @@ go test ./trust -run '^$' -fuzz FuzzLoadInternal -fuzztime 30s
 
 # Local run without object storage (the image bakes lotl-signers.yaml; override the
 # path to use your own manifest/PEM):
+SERVICE_NAME=trust-anchor \
 TRUST_SNAPSHOT_DIR=./.snapshots \
 LOTL_BOOTSTRAP_CERTS_PATH=./trust-config/lotl-signers.yaml \
-AUTH_ISSUER_URL=http://localhost:8080 SERVICE_AUDIENCE=svc:trust-anchor \
+AUTH_MODE=internal TRUST_ADMIN_KEY=dev-only \
 go run ./cmd/server web
 ```
 
-The Docker build context is this module directory (no local `replace` directives — the `gmb-lib` dependencies are fetched at their public tags): `docker build -t trust-anchor:dev .`. First install seeds the bootstrap from the baked `lotl-signers.yaml`.
+The Docker build context is this module directory; every dependency is fetched from its public module tag (no `replace` directives): `docker build -t trust-anchor:dev .`. First install seeds the bootstrap from the baked `lotl-signers.yaml`. The full gate CI runs — lint, vulnerability check, tidy check — is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 When a list changes shape or yearly, refresh the fixtures under `testdata/` (the current LOTL + pivots + national TLs) and update the expected counts/fingerprints in the extraction and pipeline tests; verify against live first with the `live`-tagged refresh test.
 
@@ -536,7 +578,7 @@ not omissions — recorded here so they are not rediscovered as defects.
 
 ## Known limitations
 
-- **`source/` is a scaffold.** The multi-source adapter contract (wallet-provider lists, QTSP lists, certified-wallet lists, RP registries) is defined but not yet wired into the pipeline; today's ingestion is the LOTL + national-TL + internal-source path described above. Migrating the existing ingestion onto the adapters is a trust-critical refactor whose acceptance bar is byte-identical output.
+- **Only list-shaped sources are wired.** The `source/` contract anticipates several kinds of trust publication; today the EU LOTL and the national trusted lists go through it as adapters, while registry-shaped sources (relying-party registries) and further list types (wallet-provider, certified-wallet and QTSP lists) are contracts without implementations. The `.sha2` unchanged-skip is applied to national lists, not yet to the LOTL itself.
 - **EUDI actor trust is operator-declared, not upstream.** Until the EU publishes machine-readable trust lists for the new EUDI actor types, typed anchors come only from `INTERNAL_TRUST_SOURCE` — a direct-trust file, not an XML-DSig-verified list.
 - **No file-watcher.** The internal trust source is re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.
 - **`qscdOnly` fidelity depends on the upstream list.** The flag maps both QSCD-positive qualifiers (`QCWithQSCD` and `QCQSCDManagedOnBehalf` — the remote/cloud-signing shape, per `[ETSI TS 119 615 V1.4.1 §4.5.4]` Table 7); it remains an anchor-level approximation of a per-certificate determination (see the conformance position above), and some national lists carry the qualifiers only on historical entries.
