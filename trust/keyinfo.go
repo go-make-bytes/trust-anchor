@@ -54,59 +54,19 @@ var namedCurves = map[string]string{
 // curve) of a DER certificate by reading its SubjectPublicKeyInfo
 // structurally — the algorithm identifier and its parameters, nothing else.
 // It never interprets the key, so it can name what the cryptographic parser
-// refused; it is what lets a skipped service say "brainpoolP256r1" instead
-// of just "unsupported". Any structural defect on the way to the identifier
-// yields two empty strings — a certificate this cannot read is reported
-// without key detail, never with a guess.
+// refused. Any structural defect yields two empty strings — a certificate
+// this cannot read is reported without key detail, never with a guess.
 func spkiAlgorithm(der []byte) (algorithm, curve string) {
-	// Certificate ::= SEQUENCE { tbsCertificate, signatureAlgorithm, signature }
-	var cert asn1.RawValue
-	if rest, err := asn1.Unmarshal(der, &cert); err != nil || len(rest) != 0 || !isSequence(cert) {
-		return "", ""
-	}
-	var tbs asn1.RawValue
-	if _, err := asn1.Unmarshal(cert.Bytes, &tbs); err != nil || !isSequence(tbs) {
-		return "", ""
-	}
-
-	// TBSCertificate ::= SEQUENCE { version [0] EXPLICIT OPTIONAL, serialNumber,
-	//   signature, issuer, validity, subject, subjectPublicKeyInfo, ... }
-	rest := tbs.Bytes
-	var el asn1.RawValue
-	var err error
-	if rest, err = asn1.Unmarshal(rest, &el); err != nil {
-		return "", ""
-	}
-	if el.Class == asn1.ClassContextSpecific && el.Tag == 0 {
-		// The explicit version; the serial number follows.
-		if rest, err = asn1.Unmarshal(rest, &el); err != nil {
-			return "", ""
-		}
-	}
-	// el is now the serial number. Skip signature, issuer, validity, subject.
-	for range 4 {
-		if rest, err = asn1.Unmarshal(rest, &el); err != nil {
-			return "", ""
-		}
-	}
-	// el is the subject; the next element is the SubjectPublicKeyInfo.
-	var spki asn1.RawValue
-	if _, err = asn1.Unmarshal(rest, &spki); err != nil || !isSequence(spki) {
-		return "", ""
-	}
-
-	// SubjectPublicKeyInfo ::= SEQUENCE { algorithm AlgorithmIdentifier, subjectPublicKey BIT STRING }
-	// AlgorithmIdentifier ::= SEQUENCE { algorithm OID, parameters ANY OPTIONAL }
-	var alg asn1.RawValue
-	if _, err = asn1.Unmarshal(spki.Bytes, &alg); err != nil || !isSequence(alg) {
-		return "", ""
-	}
-	var oid asn1.ObjectIdentifier
-	params, err := asn1.Unmarshal(alg.Bytes, &oid)
+	body, err := decodeCertificateBody(der)
 	if err != nil {
 		return "", ""
 	}
+	return body.KeyAlgorithm, body.Curve
+}
 
+// keyAlgorithmName maps a SubjectPublicKeyInfo algorithm identifier and its
+// parameters to the reported names.
+func keyAlgorithmName(oid asn1.ObjectIdentifier, params []byte) (algorithm, curve string) {
 	switch {
 	case oid.Equal(oidRSAEncryption):
 		return KeyAlgorithmRSA, ""
@@ -148,3 +108,8 @@ func ecCurveName(params []byte) string {
 func isSequence(v asn1.RawValue) bool {
 	return v.Class == asn1.ClassUniversal && v.Tag == asn1.TagSequence && v.IsCompound
 }
+
+// nistCurves are the named curves every mainstream X.509 stack — the
+// standard library included — implements. An ECDSA anchor on any other
+// curve is held, not common (see Anchor.KeyCommon).
+var nistCurves = map[string]bool{"P-224": true, "P-256": true, "P-384": true, "P-521": true}

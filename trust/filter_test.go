@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"sort"
 	"testing"
 	"time"
 )
@@ -82,7 +83,7 @@ func testSnapshot(t *testing.T) *Snapshot {
 func TestFilterTerritoryAndUse(t *testing.T) {
 	s := testSnapshot(t)
 
-	all, err := Filter(s, nil, "", false, "")
+	all, err := Filter(s, nil, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +91,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 		t.Fatalf("unfiltered: got %d anchors, want 5", len(all))
 	}
 
-	lv, err := Filter(s, []string{"LV"}, "", false, "")
+	lv, err := Filter(s, []string{"LV"}, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 		t.Fatalf("LV: got %d anchors, want 4", len(lv))
 	}
 
-	sig, err := Filter(s, []string{"LV"}, UseSignature, false, "")
+	sig, err := Filter(s, []string{"LV"}, UseSignature, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +114,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 	}
 
 	// authentication is an alias of signature at anchor level.
-	auth, err := Filter(s, []string{"LV"}, UseAuthentication, false, "")
+	auth, err := Filter(s, []string{"LV"}, UseAuthentication, false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +122,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 		t.Fatalf("authentication bundle (%d) differs from signature bundle (%d)", len(auth), len(sig))
 	}
 
-	qscd, err := Filter(s, []string{"LV", "EE"}, "", true, "")
+	qscd, err := Filter(s, []string{"LV", "EE"}, "", true, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestFilterTerritoryAndUse(t *testing.T) {
 		t.Fatalf("qscdOnly: got %d anchors, want 2", len(qscd))
 	}
 
-	if _, err := Filter(s, nil, "bogus", false, ""); err == nil {
+	if _, err := Filter(s, nil, "bogus", false, "", ""); err == nil {
 		t.Fatal("invalid use accepted")
 	}
 }
@@ -158,7 +159,7 @@ func TestFilterIncludesInternal(t *testing.T) {
 
 	// Untyped (legacy) bundle: only the TL anchor — the typed internal
 	// anchor no longer leaks in.
-	untyped, err := Filter(s, nil, "", false, "")
+	untyped, err := Filter(s, nil, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +173,7 @@ func TestFilterIncludesInternal(t *testing.T) {
 	}
 
 	// type=pid_provider: only the internal anchor, from any source.
-	typed, err := Filter(s, nil, "", false, "pid_provider")
+	typed, err := Filter(s, nil, "", false, "pid_provider", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,14 +185,14 @@ func TestFilterIncludesInternal(t *testing.T) {
 	}
 
 	// Unknown type is rejected (fail closed).
-	if _, err := Filter(s, nil, "", false, "bogus"); err == nil {
+	if _, err := Filter(s, nil, "", false, "bogus", ""); err == nil {
 		t.Fatal("invalid type accepted")
 	}
 }
 
 func TestPEMBundleParses(t *testing.T) {
 	s := testSnapshot(t)
-	anchors, err := Filter(s, nil, "", false, "")
+	anchors, err := Filter(s, nil, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,5 +407,55 @@ func TestComputeDiffIncludesInternal(t *testing.T) {
 	}
 	if removed[0].Fingerprint != next.Internal[1].FingerprintSHA256 {
 		t.Errorf("removed fingerprint = %q, want the internal anchor's %q", removed[0].Fingerprint, next.Internal[1].FingerprintSHA256)
+	}
+}
+
+// Filter's keys dimension: the default and KeysCommon serve only anchors
+// whose key every consumer can parse; KeysAll adds the held ones, from a
+// territory and from the internal source alike; anything else is rejected.
+// Anchors persisted before the key names existed (empty KeyAlgorithm) count
+// as common — they were parsed by the standard library to get there.
+func TestFilterKeysHoldsNonNISTCurves(t *testing.T) {
+	held := testAnchor(t, "LV", "lv-brainpool", nil, false)
+	held.KeyAlgorithm, held.Curve = KeyAlgorithmECDSA, "brainpoolP256r1"
+	legacy := testAnchor(t, "LV", "lv-legacy", nil, false) // no key names at all
+	pss := testAnchor(t, "LV", "lv-pss", nil, false)
+	pss.KeyAlgorithm = KeyAlgorithmRSAPSS
+	p384 := testAnchor(t, "LV", "lv-p384", nil, false)
+	p384.KeyAlgorithm, p384.Curve = KeyAlgorithmECDSA, "P-384"
+	internalHeld := testAnchor(t, "EU", "internal-brainpool", nil, false)
+	internalHeld.Source, internalHeld.KeyAlgorithm, internalHeld.Curve = SourceInternal, KeyAlgorithmECDSA, "brainpoolP384r1"
+
+	s := &Snapshot{
+		Territories: []*Territory{{Code: "LV", Anchors: []Anchor{held, legacy, pss, p384}}},
+		Internal:    []Anchor{internalHeld},
+	}
+	names := func(as []Anchor) []string {
+		var out []string
+		for _, a := range as {
+			out = append(out, a.ServiceName)
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	for _, keys := range []string{"", KeysCommon} {
+		got, err := Filter(s, nil, "", false, "", keys)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"lv-legacy", "lv-p384", "lv-pss"}; !equalStrings(names(got), want) {
+			t.Fatalf("keys=%q served %v, want %v", keys, names(got), want)
+		}
+	}
+	got, err := Filter(s, nil, "", false, "", KeysAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"internal-brainpool", "lv-brainpool", "lv-legacy", "lv-p384", "lv-pss"}; !equalStrings(names(got), want) {
+		t.Fatalf("keys=all served %v, want %v", names(got), want)
+	}
+	if _, err := Filter(s, nil, "", false, "", "bogus"); err == nil {
+		t.Fatal("keys=bogus accepted")
 	}
 }

@@ -928,7 +928,7 @@ func TestComputeIDExcludesSkippedServices(t *testing.T) {
 	}
 	withSkipped.Territories[0].Skipped = append(withSkipped.Territories[0].Skipped, trust.SkippedService{
 		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
-		Reason: trust.SkipUnsupportedKey, FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
+		Reason: trust.SkipInvalidCertificate, FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
 	})
 	if withSkipped.ComputeID() != full.ID {
 		t.Error("a skipped-service entry moved the content id")

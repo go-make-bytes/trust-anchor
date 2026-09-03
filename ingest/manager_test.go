@@ -245,9 +245,9 @@ func skippedSnapshot(t *testing.T) *trust.Snapshot {
 	t.Helper()
 	snap := managerSnapshot(t)
 	snap.Territories[0].Skipped = []trust.SkippedService{
-		{TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)", Reason: trust.SkipUnsupportedKey,
+		{TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)", Reason: trust.SkipInvalidCertificate,
 			FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1"},
-		{TSPName: "Deutsche Telekom AG", ServiceName: "Qualified.ID", Reason: trust.SkipUnsupportedKey,
+		{TSPName: "Deutsche Telekom AG", ServiceName: "Qualified.ID", Reason: trust.SkipInvalidCertificate,
 			FingerprintSHA256: "cc9d4dcc", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1"},
 	}
 	snap.ComputeID()
@@ -270,7 +270,7 @@ func TestManagerServesSkippedServicesGauge(t *testing.T) {
 	if out := m.Refresh(context.Background()); out.CycleErr != nil {
 		t.Fatal(out.CycleErr)
 	}
-	const series = `trust_services_skipped{territory="LV",reason="unsupported-key"}`
+	const series = `trust_services_skipped{territory="LV",reason="invalid-certificate"}`
 	if v, ok := metricValue(gatherMetrics(), series); !ok || v != 2 {
 		t.Fatalf("%s = %v (present=%v), want 2", series, v, ok)
 	}
@@ -328,7 +328,7 @@ func TestBootInventoryNamesSkippedServices(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{`"territory":"LV"`, `"name":"D-Trust GmbH"`, `"service":"Qualified.ID"`,
-		`"reason":"unsupported-key"`, `"sha256":"23395de6"`, `"keyAlgorithm":"ecdsa"`, `"curve":"brainpoolP256r1"`} {
+		`"reason":"invalid-certificate"`, `"sha256":"23395de6"`, `"keyAlgorithm":"ecdsa"`, `"curve":"brainpoolP256r1"`} {
 		if !strings.Contains(string(named), want) {
 			t.Errorf("skipped_services %s lacks %s", named, want)
 		}

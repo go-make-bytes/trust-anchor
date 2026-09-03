@@ -3,6 +3,55 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.4.0
+
+### Changed — anchors whose key the parser cannot interpret are held, and served on request
+
+v0.3.0 named the twelve German CA/QC services whose certificates this service could not turn
+into anchors because their public keys are on a Brainpool curve. This release **holds them**:
+when the certificate parser refuses a certificate for that one reason, the certificate body is
+read structurally — subject, validity, key algorithm and curve, the raw bytes and their
+fingerprint — and the anchor is stored like any other. Nothing this service does with an anchor
+needs the key; the key belongs to the consumer that builds a chain. Every other parse failure (a
+legacy encoding defect, a broken value) is still a skip.
+
+**What you receive does not change unless you ask.** Both anchor routes gain a `keys` filter:
+
+- `keys=common` — **the default** — serves only anchors whose key every mainstream X.509 stack
+  parses: RSA (including keys identified as RSASSA-PSS), ECDSA on the NIST P-curves, Ed25519. This
+  is byte-for-byte the bundle v0.3.0 served. A consumer that rejects a bundle on the first
+  certificate it cannot parse is safe on the default.
+- `keys=all` — adds the held anchors. Ask for it only from a consumer that can verify
+  Brainpool-curve chains or skips certificates it cannot parse.
+- Any other value answers `422`, like an unknown `use` or `type`.
+
+Every anchor on `/v1/anchors.json` now names its key — `keyAlgorithm` (`rsa`, `rsassa-pss`, `ecdsa`,
+`ed25519`, or the dotted OID of anything else) and, for ECDSA, `curve` (`P-256` … `brainpoolP256r1` …).
+The six German anchors whose keys are RSASSA-PSS-identified, served all along with a key no Go
+consumer can use, are named for what they are. Anchors persisted by an earlier release carry the
+fields from their next refresh cycle.
+
+```json
+{ "territory": "DE", "tspName": "D-Trust GmbH", "serviceName": "D-Trust remote signature service (sign-me)",
+  "fingerprintSha256": "23395de6…", "subject": "CN=D-TRUST …,O=D-Trust GmbH,C=DE",
+  "keyAlgorithm": "ecdsa", "curve": "brainpoolP256r1", … }
+```
+
+`GET /v1/snapshot` gains `heldCount` per territory (Germany: 12), and its `skipped` list no longer
+carries those services — the `reason` set shrinks to `invalid-certificate`, `no-certificate`,
+`status-conflict`; `trust_services_skipped` for Germany drops to 0. The trusted-list metadata,
+statuses, qualifiers and uses of a held anchor come from the list exactly as for a parsed one.
+
+**Two effects to expect once.** Held anchors are trust content, so the snapshot id — and every
+consumer's `ETag` — moves once at the first cycle after this release, and the refresh emits one
+`trust.anchor_change` (added) event per held anchor. Both are the change being reported, not a
+fault.
+
+The structural reader is exercised on real German certificates (a brainpoolP256r1 CA, an
+RSASSA-PSS-keyed CA, and a legacy certificate with a negatively encoded modulus that must stay
+refused), checked field for field against the standard library on every recorded anchor, and
+fuzzed.
+
 ## v0.3.0
 
 ### Added — a service the bundle is missing is now reported, not silent

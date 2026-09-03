@@ -152,6 +152,7 @@ func buildInternalAnchor(e internalAnchor, baseDir string, now time.Time) (Ancho
 		status = grantedStatusURI
 	}
 
+	keyAlgorithm, curve := spkiAlgorithm(cert.Raw)
 	return Anchor{
 		Territory:          territory,
 		Source:             SourceInternal,
@@ -165,6 +166,8 @@ func buildInternalAnchor(e internalAnchor, baseDir string, now time.Time) (Ancho
 		Subject:            cert.Subject.String(),
 		NotBefore:          cert.NotBefore,
 		NotAfter:           notAfter,
+		KeyAlgorithm:       keyAlgorithm,
+		Curve:              curve,
 		Type:               declaredType,
 		UseCases:           e.UseCases,
 	}, nil

@@ -71,6 +71,15 @@ type Anchor struct {
 	// no Fore* qualifier and the anchor is included in ALL uses.
 	Uses []string `json:"uses,omitempty"`
 
+	// KeyAlgorithm and Curve name the anchor's public key as read from the
+	// certificate's structure: rsa · rsassa-pss · ecdsa · ed25519 · ed448, or
+	// the dotted OID of anything else; Curve is set for ecdsa (P-256 …
+	// brainpoolP256r1 …). They are description, not a decision — the
+	// consumer building a chain decides what it can verify with. Empty on
+	// anchors persisted before the fields existed (treated as common).
+	KeyAlgorithm string `json:"keyAlgorithm,omitempty"`
+	Curve        string `json:"curve,omitempty"`
+
 	// Type is the EUDI anchor type (AnchorTypes); "" = legacy CA/QC anchor.
 	Type string `json:"type,omitempty"`
 	// UseCases lists EAA use-case accreditation (consumer extension E2/GAP-04).
@@ -94,6 +103,33 @@ func (a Anchor) MatchesUse(use string) bool {
 		}
 	}
 	return false
+}
+
+// KeyCommon reports whether the anchor's public key is of a kind every
+// mainstream X.509 stack parses — RSA (including RSASSA-PSS-identified
+// keys), ECDSA on a NIST P-curve, Ed25519 — and so belongs in the default
+// bundle. An ECDSA key on any other curve (the Brainpool family in practice)
+// is held: served only to a request that asks for keys=all, because a
+// consumer whose parser refuses the key would otherwise reject the whole
+// bundle. The rule is by key identifiers, not by what any one parser
+// happens to accept.
+func (a Anchor) KeyCommon() bool {
+	if a.KeyAlgorithm != KeyAlgorithmECDSA || a.Curve == "" {
+		return true
+	}
+	return nistCurves[a.Curve]
+}
+
+// Values of the `keys` bundle filter.
+const (
+	KeysCommon = "common" // the default: anchors whose key every consumer can parse
+	KeysAll    = "all"    // every anchor, held ones included
+)
+
+// ValidKeys reports whether keys is an accepted `keys` filter value ("" =
+// common).
+func ValidKeys(keys string) bool {
+	return keys == "" || keys == KeysCommon || keys == KeysAll
 }
 
 // Fingerprint computes the lowercase hex SHA-256 of a certificate.
@@ -145,15 +181,12 @@ type Territory struct {
 // Skip reasons — the closed set a skipped service is reported under (and the
 // `reason` label of the skipped-services gauge).
 const (
-	// SkipUnsupportedKey: the certificate is well-formed but carries a
-	// public key of a kind this service's certificate parser does not
-	// support — today an elliptic curve outside NIST P-256/384/521 (the
-	// Brainpool curves German providers use). KeyAlgorithm and Curve say
-	// which.
-	SkipUnsupportedKey = "unsupported-key"
 	// SkipInvalidCertificate: the X509Certificate identity could not be
-	// decoded or parsed for any other reason (a legacy encoding defect, a
-	// broken base64 value).
+	// decoded or parsed (a legacy encoding defect, a broken base64 value) —
+	// including a certificate whose key the parser refuses AND whose body
+	// the structural read could not make sense of either. A well-formed
+	// certificate with an unsupported key is not skipped: it is held (see
+	// Anchor.KeyCommon).
 	SkipInvalidCertificate = "invalid-certificate"
 	// SkipNoCertificate: the service's digital identity carries no
 	// X509Certificate element at all (subject name or key identifier only).
@@ -166,8 +199,8 @@ const (
 // SkippedService is one accepted trust service whose certificate did not
 // become an anchor. TSPName and ServiceName come from the list; the
 // fingerprint is SHA-256 of the DER as listed (present whenever the bytes
-// decoded); KeyAlgorithm and Curve are filled when the certificate's
-// structure could be read even though its key could not be parsed.
+// decoded); KeyAlgorithm and Curve are filled when the key identifiers could
+// be read even though the certificate as a whole could not.
 type SkippedService struct {
 	TSPName           string `json:"tspName"`
 	ServiceName       string `json:"serviceName"`
