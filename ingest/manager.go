@@ -65,6 +65,7 @@ func (m *Manager) activate(next *trust.Snapshot) {
 	m.active.Store(next)
 	setAnchorGauges(next)
 	setTerritoryFailedGauges(next)
+	setSkippedGauges(next)
 }
 
 // Initialize loads the persisted bootstrap + snapshot. When the store has no
@@ -387,17 +388,41 @@ func pendingEqual(a, b []trust.PendingAnchor) bool {
 	return true
 }
 
-// territoryStateChanged reports whether any territory's health or sequence
-// moved between two snapshots. Health (carried-over, failed) is deliberately
-// outside the content id, so this check is what makes a health flip still
-// persist and activate a new snapshot.
+// territoryStateChanged reports whether any territory's health, sequence or
+// skipped-service set moved between two snapshots. Health (carried-over,
+// failed, skipped) is deliberately outside the content id, so this check is
+// what makes a health flip still persist and activate a new snapshot.
 func territoryStateChanged(prev, next *trust.Snapshot) bool {
 	for _, t := range next.Territories {
 		pt := prev.Territory(t.Code)
 		if pt == nil || pt.CarriedOver != t.CarriedOver || pt.TLSequence != t.TLSequence ||
-			pt.Failed != t.Failed || pt.FailureReason != t.FailureReason {
+			pt.Failed != t.Failed || pt.FailureReason != t.FailureReason ||
+			!skippedEqual(pt.Skipped, t.Skipped) {
 			return true
 		}
 	}
 	return false
+}
+
+// skippedEqual compares two skipped-service sets by identity (fingerprint,
+// or service when the bytes never decoded) and reason.
+func skippedEqual(a, b []trust.SkippedService) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	key := func(s trust.SkippedService) string {
+		return s.TSPName + "/" + s.ServiceName + "/" + s.FingerprintSHA256 + "/" + s.Reason
+	}
+	seen := make(map[string]int, len(a))
+	for _, s := range a {
+		seen[key(s)]++
+	}
+	for _, s := range b {
+		k := key(s)
+		if seen[k] == 0 {
+			return false
+		}
+		seen[k]--
+	}
+	return true
 }

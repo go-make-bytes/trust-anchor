@@ -132,6 +132,50 @@ type Territory struct {
 	FailureReason string `json:"failureReason,omitempty"`
 
 	Anchors []Anchor `json:"anchors"`
+
+	// Skipped names every accepted service of this list whose certificate
+	// could not become an anchor — a declared absence in the served set.
+	// Health, not trust content: like Failed and CarriedOver it stays out of
+	// the snapshot id, so a consumer's ETag moves only when trust changes,
+	// while the snapshot API, the inventory line and the skipped-services
+	// gauge all say what the bundle is missing and why.
+	Skipped []SkippedService `json:"skipped,omitempty"`
+}
+
+// Skip reasons — the closed set a skipped service is reported under (and the
+// `reason` label of the skipped-services gauge).
+const (
+	// SkipUnsupportedKey: the certificate is well-formed but carries a
+	// public key of a kind this service's certificate parser does not
+	// support — today an elliptic curve outside NIST P-256/384/521 (the
+	// Brainpool curves German providers use). KeyAlgorithm and Curve say
+	// which.
+	SkipUnsupportedKey = "unsupported-key"
+	// SkipInvalidCertificate: the X509Certificate identity could not be
+	// decoded or parsed for any other reason (a legacy encoding defect, a
+	// broken base64 value).
+	SkipInvalidCertificate = "invalid-certificate"
+	// SkipNoCertificate: the service's digital identity carries no
+	// X509Certificate element at all (subject name or key identifier only).
+	SkipNoCertificate = "no-certificate"
+	// SkipStatusConflict: the same certificate is listed under service
+	// entries with conflicting statuses, so the anchor fails closed.
+	SkipStatusConflict = "status-conflict"
+)
+
+// SkippedService is one accepted trust service whose certificate did not
+// become an anchor. TSPName and ServiceName come from the list; the
+// fingerprint is SHA-256 of the DER as listed (present whenever the bytes
+// decoded); KeyAlgorithm and Curve are filled when the certificate's
+// structure could be read even though its key could not be parsed.
+type SkippedService struct {
+	TSPName           string `json:"tspName"`
+	ServiceName       string `json:"serviceName"`
+	Reason            string `json:"reason"`
+	Detail            string `json:"detail,omitempty"`
+	FingerprintSHA256 string `json:"fingerprintSha256,omitempty"`
+	KeyAlgorithm      string `json:"keyAlgorithm,omitempty"`
+	Curve             string `json:"curve,omitempty"`
 }
 
 // StaleAt reports whether the territory data is past NextUpdate + grace.

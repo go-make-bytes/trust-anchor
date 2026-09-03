@@ -905,3 +905,32 @@ func TestRefreshPrefersPreviousSnapshotSigners(t *testing.T) {
 		t.Errorf("pivot seq = %d, want 378", snap.LOTLPivotSeq)
 	}
 }
+
+// TestComputeIDExcludesSkippedServices: a skipped service is a declared
+// absence — health, not trust content — so a snapshot that differs only in
+// what it reports as skipped keeps its id, and every consumer's ETag with it.
+func TestComputeIDExcludesSkippedServices(t *testing.T) {
+	ft := newFixtureTransport()
+	p := testPipeline(t, ft, ModeAuto)
+	boot := fixtureBootstrap(t, "eu-lotl-pivot-378.xml")
+
+	full, err := p.Refresh(context.Background(), nil, boot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Territories) == 0 {
+		t.Fatal("fixture cycle produced no territories")
+	}
+
+	withSkipped, err := cloneSnapshot(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withSkipped.Territories[0].Skipped = append(withSkipped.Territories[0].Skipped, trust.SkippedService{
+		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
+		Reason: trust.SkipUnsupportedKey, FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
+	})
+	if withSkipped.ComputeID() != full.ID {
+		t.Error("a skipped-service entry moved the content id")
+	}
+}

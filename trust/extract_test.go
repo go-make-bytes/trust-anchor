@@ -1,7 +1,9 @@
 package trust
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -366,5 +368,128 @@ func TestDuplicateCertStatusConflictFailsClosed(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("status conflict not reported: %+v", warnings)
+	}
+}
+
+// serviceTL builds a one-provider list from ready-made services.
+func serviceTL(services ...tsl.Service) *tsl.TrustedList {
+	return &tsl.TrustedList{ProviderList: &tsl.ProviderList{Providers: []tsl.Provider{{
+		Information: tsl.ProviderInformation{Name: tsl.LocalizedText{Names: []tsl.LocalizedName{{Lang: "en", Value: "D-Trust GmbH"}}}},
+		Services:    services,
+	}}}}
+}
+
+func grantedCAQC(name string, ids ...tsl.DigitalID) tsl.Service {
+	return tsl.Service{Information: tsl.ServiceInformation{
+		TypeIdentifier:  tsl.ServiceTypeCAQC,
+		Name:            tsl.LocalizedText{Names: []tsl.LocalizedName{{Lang: "en", Value: name}}},
+		Status:          NormalizeStatus("granted"),
+		DigitalIdentity: tsl.ServiceDigitalIdentity{DigitalIDs: ids},
+	}}
+}
+
+func skipFor(t *testing.T, warnings []ExtractionWarning, service string) ExtractionWarning {
+	t.Helper()
+	for _, w := range warnings {
+		if w.ServiceName == service && w.Code != "" {
+			return w
+		}
+	}
+	t.Fatalf("no skip reported for %q: %+v", service, warnings)
+	return ExtractionWarning{}
+}
+
+// A granted CA/QC service whose certificate carries a key the parser cannot
+// interpret is skipped AS DATA: named, fingerprinted over the listed bytes,
+// its key algorithm and curve read structurally, under the closed reason
+// unsupported-key — while a sibling service with a parseable key is
+// extracted as before. This is the German-list shape (twelve brainpool
+// services among hundreds), reproduced with one synthetic certificate.
+func TestExtractReportsUnsupportedKeyAsSkippedService(t *testing.T) {
+	bp := brainpoolCertDER(t, "D-TRUST Qualified CA brainpool")
+	good := testCert(t, "D-TRUST Qualified CA P-256")
+	tl := serviceTL(
+		grantedCAQC("D-Trust remote signature service (sign-me)", tsl.DigitalID{X509Certificate: base64.StdEncoding.EncodeToString(bp)}),
+		grantedCAQC("D-Trust qualified CA", tsl.DigitalID{X509Certificate: base64.StdEncoding.EncodeToString(good.Raw)}),
+	)
+
+	anchors, warnings, err := ExtractAnchors(tl, "DE", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchors) != 1 || anchors[0].FingerprintSHA256 != Fingerprint(good) {
+		t.Fatalf("anchors = %+v, want exactly the parseable sibling", anchors)
+	}
+
+	w := skipFor(t, warnings, "D-Trust remote signature service (sign-me)")
+	sum := sha256.Sum256(bp)
+	want := ExtractionWarning{
+		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
+		Code: SkipUnsupportedKey, FingerprintSHA256: hex.EncodeToString(sum[:]),
+		KeyAlgorithm: KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
+	}
+	if w.TSPName != want.TSPName || w.Code != want.Code || w.FingerprintSHA256 != want.FingerprintSHA256 ||
+		w.KeyAlgorithm != want.KeyAlgorithm || w.Curve != want.Curve {
+		t.Fatalf("skip = %+v\nwant  %+v (reason text aside)", w, want)
+	}
+	if !strings.Contains(w.Reason, unsupportedCurveMessage) {
+		t.Fatalf("skip reason %q does not carry the parser's message", w.Reason)
+	}
+
+	skipped := Skipped(warnings)
+	if len(skipped) != 1 || skipped[0].Reason != SkipUnsupportedKey || skipped[0].Curve != "brainpoolP256r1" ||
+		skipped[0].FingerprintSHA256 != want.FingerprintSHA256 || skipped[0].Detail != w.Reason {
+		t.Fatalf("Skipped() = %+v", skipped)
+	}
+}
+
+// The other two per-service reasons: bytes that are not a certificate at all
+// (fingerprinted, no key detail — nothing to read) and an identity with no
+// X509Certificate element (no fingerprint — there are no bytes). Aggregate
+// unaccepted-type warnings stay out of the skipped set.
+func TestExtractReportsInvalidAndMissingCertificates(t *testing.T) {
+	junk := []byte{0x30, 0x03, 0x02, 0x01, 0x01}
+	tl := serviceTL(
+		grantedCAQC("junk identity", tsl.DigitalID{X509Certificate: base64.StdEncoding.EncodeToString(junk)}),
+		grantedCAQC("ski only", tsl.DigitalID{X509SKI: "AQID"}),
+		tsl.Service{Information: tsl.ServiceInformation{
+			TypeIdentifier: "http://uri.etsi.org/TrstSvc/Svctype/TSA/QTST",
+			Name:           tsl.LocalizedText{Names: []tsl.LocalizedName{{Lang: "en", Value: "timestamp"}}},
+			Status:         NormalizeStatus("granted"),
+		}},
+	)
+	anchors, warnings, err := ExtractAnchors(tl, "DE", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(anchors) != 0 {
+		t.Fatalf("anchors = %+v, want none", anchors)
+	}
+
+	sum := sha256.Sum256(junk)
+	j := skipFor(t, warnings, "junk identity")
+	if j.Code != SkipInvalidCertificate || j.FingerprintSHA256 != hex.EncodeToString(sum[:]) || j.KeyAlgorithm != "" {
+		t.Fatalf("junk skip = %+v", j)
+	}
+	s := skipFor(t, warnings, "ski only")
+	if s.Code != SkipNoCertificate || s.FingerprintSHA256 != "" {
+		t.Fatalf("ski-only skip = %+v", s)
+	}
+	if got := Skipped(warnings); len(got) != 2 {
+		t.Fatalf("Skipped() = %+v, want the two per-service skips and not the type aggregate", got)
+	}
+}
+
+// A duplicated certificate with conflicting statuses is a skipped service
+// too — the anchor the list declares twice and the bundle carries never.
+func TestStatusConflictIsASkippedService(t *testing.T) {
+	tl := dupCertTL(t, "granted", "withdrawn", "", "")
+	_, warnings, err := ExtractAnchors(tl, "LV", []string{"granted"}, nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	skipped := Skipped(warnings)
+	if len(skipped) != 1 || skipped[0].Reason != SkipStatusConflict || skipped[0].FingerprintSHA256 == "" {
+		t.Fatalf("Skipped() = %+v, want one status-conflict entry with its fingerprint", skipped)
 	}
 }

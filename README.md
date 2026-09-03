@@ -21,7 +21,7 @@ flowchart LR
     subgraph UP["EU trust publications — https-only, TLS-verified, size-capped"]
         direction TB
         LOTL["EU LOTL + pivot chain<br/>(ETSI TS 119 612)"]
-        NTL["national Trusted Lists<br/>(the configured territories,<br/>or every LOTL-listed one via the EU group)"]
+        NTL["national Trusted Lists<br/>(every LOTL-listed one by default — the EU group —<br/>or the configured territories)"]
     end
 
     BOOT[["operator-pinned LOTL signer set<br/>(baked lotl-signers.yaml)"]]
@@ -71,6 +71,7 @@ docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
   -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v "$PWD/trust-anchor-data:/var/lib/trust-anchor" \
   -e TRUST_TERRITORIES=EU \
   ghcr.io/go-make-bytes/trust-anchor:latest
+# TRUST_TERRITORIES=EU is the default (every list the LOTL points to); narrow with codes, e.g. LV,EE
 
 curl -s localhost:8080/readyz                       # 503 until the first cycle completes (about a minute for the EU group), then 200
 curl -s localhost:8080/v1/snapshot | head -c 400    # the served snapshot, per-territory outcomes
@@ -93,7 +94,7 @@ Two anonymous probes plus a token-guarded `/v1` API. Every `/v1` route enforces 
 | `GET /readyz` | none | Readiness — 503 until a valid snapshot is loaded (store restore or first successful cycle), then 200 |
 | `GET /v1/anchors` | `trust:read` | Filtered **PEM bundle** (`application/x-pem-file`). Strong `ETag` = snapshot id; honours `If-None-Match` (returns 304). Exposes `X-Trust-Snapshot` and `X-Trust-Stale` headers |
 | `GET /v1/anchors.json` | `trust:read` | Same filters — base64-DER certificates plus TSP/service metadata, qualifications, fingerprints, and `type` / `useCases` / `tlSequence` where set |
-| `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `internalCount` |
+| `GET /v1/snapshot` | `trust:read` | Snapshot summary + diff vs the previous snapshot + pending set + `advertisedOj` + active bootstrap summary (`ojReference`, fingerprints) + `internalCount`. Per territory: `anchorCount`, and the services the list declares that the bundle does **not** carry — `skippedCount` plus a `skipped` list naming each (provider, service, `reason`, fingerprint, and the key algorithm / curve when readable) |
 | `POST /v1/pending/{fingerprint}/approve` | `trust:admin` | Approve a held addition (hold activation mode) |
 | `POST /v1/refresh` | `trust:admin` | Re-read the operator-declared source (applied even when the trusted-list upstream is unreachable), then run an immediate ingestion cycle. Answers `200` with a per-half report — the declared outcome and the cycle outcome stated separately, and `snapshot` always the id being served. `502` only when nothing has ever been served and the cycle failed |
 
@@ -228,7 +229,7 @@ The signer set is layered:
 
 **Rotation** is expected only every few years (the pivot chain handles interim signer rotations automatically). The snapshot's `advertisedOj` field is the signal: when it names an Official Journal reference newer than the pinned set, a fresh signer set has been published. Adopting it means updating `trust-config/` (drop the new PEMs in, regenerate the manifest, confirm each SHA-256 against the EU DSS oj-certificates service, rebuild the image) or mounting an updated manifest for an urgent change — see [`trust-config/README.md`](trust-config/README.md). `advertisedOj` drives no automatic trust decision; the trusted signer set is always the operator-pinned one.
 
-**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. Every territory is an independent upstream and is treated as one: a per-territory failure carries that territory's previous data over (marked `carriedOver`), and a territory with **no** previous data (a fresh install, or a newly configured territory) is recorded in the snapshot as a **failed entry** (`failed` + `failureReason`, zero anchors) while the rest of the cycle completes — one broken national list never suppresses the twenty-six healthy ones, and a broken territory is visible instead of silently absent. The floor stays loud: the LOTL failing, or *every* configured territory failing with nothing to carry over, fails the whole cycle. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error. A failed entry contributes nothing to the snapshot id (health is a process outcome, not trust content), so consumer ETags move only when trust actually changes.
+**Fail-safe, not fail-open.** A total cycle failure keeps the last good snapshot active and raises `trust.refresh_failure`. Every territory is an independent upstream and is treated as one: a per-territory failure carries that territory's previous data over (marked `carriedOver`), and a territory with **no** previous data (a fresh install, or a newly configured territory) is recorded in the snapshot as a **failed entry** (`failed` + `failureReason`, zero anchors) while the rest of the cycle completes — one broken national list never suppresses the twenty-six healthy ones, and a broken territory is visible instead of silently absent. The floor stays loud: the LOTL failing, or *every* configured territory failing with nothing to carry over, fails the whole cycle. Data past its `NextUpdate` + grace is still served, flagged `X-Trust-Stale: true` and reported via `trust.stale` — staleness is a monitoring signal, not an error. A failed entry contributes nothing to the snapshot id (health is a process outcome, not trust content), so consumer ETags move only when trust actually changes. The same honesty applies one level down: an accepted service whose certificate cannot become an anchor — a public key the parser does not support, a malformed certificate, an identity with no certificate, a status conflict — is **skipped as data**, not silently: the territory's `skipped` list names it, the `trust_services_skipped` gauge counts it, and the inventory line records it, while the territory stays healthy and the snapshot id (like `failed`) does not move for it.
 
 ### The internal trust source — operator-declared EUDI anchors
 
@@ -329,7 +330,7 @@ Server, logging, metrics and tracing settings are the framework's base configura
 |---|---|---|
 | `LOTL_URL` | `https://ec.europa.eu/tools/lotl/eu-lotl.xml` | EU List of Trusted Lists location |
 | `LOTL_BOOTSTRAP_CERTS_PATH` | baked `/etc/trust-anchor/lotl-signers.yaml` | Operator-pinned LOTL signer set — the first-install seed (a `lotl-signers.yaml` manifest carrying its own OJ reference, or a PEM/DER file/dir). The image bakes a default; after first install the persisted store is authoritative and this path is ignored |
-| `TRUST_TERRITORIES` | `LV,EE` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed. Most deployments want `EU` |
+| `TRUST_TERRITORIES` | `EU` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed. The default is the whole `EU` group; list explicit codes to narrow |
 | `TRUST_ALLOW_HTTP_TERRITORIES` | *(empty)* | Territories whose trusted list may be fetched over its published plain-http pointer (e.g. `SK`). Default empty = https required. Integrity comes from the XMLDSig verification against the LOTL-pinned signers, never from transport; this waives only the defense-in-depth https rule, per named territory, with a loud log line per cycle. Never applies to the LOTL itself |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | Accepted service statuses (short names or full TS 119 612 URIs) |
 | `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence; the earliest TL `NextUpdate` is honoured too |
@@ -372,6 +373,7 @@ taxonomy).
 | `trust_anchors_total{source,territory,type}` | gauge | Served anchors per source (`tl` / `internal`), territory and anchor type (empty type = CA/QC plane). A series whose anchors vanish from the served snapshot drops to 0, never lingers at its old value |
 | `trust_declared_source_failed{source}` | gauge 0/1 | `1` while the last load of the operator-declared source (`internal`) failed and the previous set is carried over. Deliberately a metric, not a health flip: carried-over data is stale but healthy, and a degraded readiness would invite an orchestrator to restart a service that is serving fine |
 | `trust_territory_failed{territory}` | gauge 0/1 | `1` while the territory is served as a failed entry (its list could not be ingested and no previous data exists — zero anchors for it). The alerting answer to silent degradation: a wide territory set quietly shrinking to a few healthy lists is visible without diffing snapshots. Same posture as the declared gauge — never a health flip |
+| `trust_services_skipped{territory,reason}` | gauge | Accepted trust services of a *healthy* territory whose certificate did not become an anchor — the narrowing `trust_territory_failed` cannot see. `reason` is a closed set: `unsupported-key` (well-formed certificate, public key of a kind the parser does not support — today an elliptic curve outside NIST P-256/384/521, e.g. the Brainpool curves German providers use), `invalid-certificate` (undecodable or malformed), `no-certificate` (identity without an X509Certificate element), `status-conflict` (one certificate listed under conflicting statuses — dropped fail-closed). Drops to 0 when the skips vanish. The named entries are on `GET /v1/snapshot` |
 
 ### Security events
 
@@ -392,7 +394,10 @@ set, under the rule **declared trust is named, derived trust is counted**: every
 anchor is listed in full — `name`, `type`, `territory`, `status`,
 `sha256`, `validUntil` — because a declaration exists in one file on one disk and the log is its
 only other record; trusted-list anchors appear as per-territory and per-type counts, because each
-one is in a published, signed, re-fetchable list. Subjects and fingerprints are non-sensitive
+one is in a published, signed, re-fetchable list. A **skipped** trusted-list service is named too
+(`skipped_count`, and `skipped_services` with `territory`, `name`, `service`, `reason`, `sha256`,
+`keyAlgorithm`, `curve`): it is an anchor the list declares and the bundle does not carry, and
+nothing else in the served data records that absence. Subjects and fingerprints are non-sensitive
 provenance; certificate material never appears.
 
 Each declared source carries a state field that keeps three outcomes apart which look identical
@@ -420,6 +425,7 @@ Alert on these — each one means trust decisions are being made on data you wou
 | `egress.violation` | A trusted-list pointer was non-HTTPS or outside the configured allow-list. Either the upstream list changed shape, or something is redirecting it. | Treat as potentially hostile until explained. The affected territory keeps serving its last good data, so there is time to look. |
 | `trust.internal_source_error` | The operator declaration file failed to load or validate, and **the previous set is being served instead**. The edit that was just deployed is not live. | Read the diagnostic, which names the offending entry. Until it is fixed, what is served is the state before the edit — which looks identical to a successful edit from the outside. |
 | `trust.refresh_failure` | A cycle failed; the last good snapshot is still served. | One is normal on a flaky network. A run of them means refreshes have silently stopped and staleness is next. |
+| `trust_services_skipped{territory,reason}` > 0 (metric) | A healthy territory is serving **fewer anchors than its list declares**: a certificate authority the member state trusts is missing from the bundle, and a certificate chaining to it will fail validation here while the territory reports healthy. | Read the named entries on `GET /v1/snapshot` (`skipped`) or the `skipped_services` field of the inventory line. `unsupported-key` is a known limitation of this release (below) — decide whether the missing providers matter to your relying parties; a *change* in the count is the signal to alert on. `invalid-certificate` on a granted service is worth reporting to the publisher. |
 
 Review, do not alert:
 
@@ -438,7 +444,7 @@ Three operating notes that are easy to learn the hard way:
   events, so they are searchable by event type — just not joinable to a caller.
 - **Some trusted-list hosts are picky about the client.** At least one national list host returns
   403 to Go's default User-Agent while serving browsers fine, so the fetcher sends an identifying
-  `trust-anchor/1.0` User-Agent. And at least one LOTL pointer has used a plain `http://`
+  `trust-anchor/1.0 (EU trusted-list ingester; +https://github.com/go-make-bytes/trust-anchor)` User-Agent. And at least one LOTL pointer has used a plain `http://`
   location — the https-only egress rule correctly refuses such a territory unless it is named in
   `TRUST_ALLOW_HTTP_TERRITORIES`; that refusal is the guard working, not a bug.
 
@@ -578,6 +584,7 @@ not omissions — recorded here so they are not rediscovered as defects.
 
 ## Known limitations
 
+- **Anchors whose public key is outside RSA, the NIST P-curves and Ed25519 are skipped, not served.** The certificate parser this service uses refuses elliptic-curve keys on other curves — in practice the **Brainpool** curves (RFC 5639) that German qualified providers use for their CA certificates: on the German list today that is twelve granted CA/QC services (D-Trust, Deutsche Telekom, DGN, medisign, Atos), and Lithuania's qualified time-stamp services would follow if `TRUST_SERVICE_TYPES` admitted them. Nothing else about such a territory is affected — its list verifies, its other anchors are served, `trust_territory_failed` stays 0. The skip is **reported, never silent**: each service is named in the territory's `skipped` list on `GET /v1/snapshot` with `reason: unsupported-key`, its fingerprint and its curve, counted by `trust_services_skipped`, and listed in the inventory line. Holding these anchors (with their key described rather than parsed, behind an explicit request parameter so no existing consumer receives a certificate it cannot parse) is the next step; until then a relying party that must validate against a Brainpool-keyed authority needs another source for it.
 - **Only list-shaped sources are wired.** The `source/` contract anticipates several kinds of trust publication; today the EU LOTL and the national trusted lists go through it as adapters, while registry-shaped sources (relying-party registries) and further list types (wallet-provider, certified-wallet and QTSP lists) are contracts without implementations. The `.sha2` unchanged-skip is applied to national lists, not yet to the LOTL itself.
 - **EUDI actor trust is operator-declared, not upstream.** Until the EU publishes machine-readable trust lists for the new EUDI actor types, typed anchors come only from `INTERNAL_TRUST_SOURCE` — a direct-trust file, not an XML-DSig-verified list.
 - **No file-watcher.** The internal trust source is re-read at boot and on every refresh (timer or admin `POST /v1/refresh`) — never on file change alone. An operator who edits a declared file and triggers nothing serves the previous set until the next scheduled cycle; the deliberate trade is that a watcher could read a half-written trust declaration as authoritative, which no habit can recover.

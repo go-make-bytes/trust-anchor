@@ -25,6 +25,7 @@ const (
 	metricAnchorsTotal    = "trust_anchors_total"
 	metricDeclaredFailed  = "trust_declared_source_failed"
 	metricTerritoryFailed = "trust_territory_failed"
+	metricServicesSkipped = "trust_services_skipped"
 )
 
 // Declared-source key used as the `source` label value and in load reports.
@@ -75,7 +76,45 @@ var (
 
 	territoryGaugeMu   sync.Mutex
 	territoryGaugeSeen = map[string]*metrics.Gauge{}
+
+	skippedGaugeMu   sync.Mutex
+	skippedGaugeSeen = map[string]*metrics.Gauge{}
 )
+
+// setSkippedGauges recomputes the per-territory, per-reason count of
+// accepted trust services whose certificate did not become an anchor, from
+// the snapshot now being served. The reason label is the closed trust.Skip*
+// set, so cardinality is territories × a handful. A series whose skips
+// vanish drops to 0 rather than lingering. This is the gauge that says a
+// healthy territory is serving fewer anchors than its list declares —
+// the one degradation trust_territory_failed cannot see.
+func setSkippedGauges(s *trust.Snapshot) {
+	values := map[string]float64{}
+	if s != nil {
+		for _, t := range s.Territories {
+			for _, sk := range t.Skipped {
+				name := fmt.Sprintf(`%s{territory=%q,reason=%q}`, metricServicesSkipped, t.Code, sk.Reason)
+				values[name]++
+			}
+		}
+	}
+
+	skippedGaugeMu.Lock()
+	defer skippedGaugeMu.Unlock()
+	for name, g := range skippedGaugeSeen {
+		if _, live := values[name]; !live {
+			g.Set(0)
+		}
+	}
+	for name, v := range values {
+		g := skippedGaugeSeen[name]
+		if g == nil {
+			g = metrics.GetOrCreateGauge(name, nil)
+			skippedGaugeSeen[name] = g
+		}
+		g.Set(v)
+	}
+}
 
 // setTerritoryFailedGauges recomputes the per-territory 0/1 failure gauge
 // from the snapshot now being served: 1 means the territory's list could not

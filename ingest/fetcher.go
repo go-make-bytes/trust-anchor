@@ -155,7 +155,7 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	req.Header.Set("Accept", "application/vnd.etsi.tsl+xml, application/xml;q=0.9, */*;q=0.1")
 	// Some TL hosts (e.g. sr.riik.ee) reject Go's default User-Agent.
-	req.Header.Set("User-Agent", "trust-anchor/1.0 (eSignature-Portal trusted-list ingester)")
+	req.Header.Set("User-Agent", "trust-anchor/1.0 (EU trusted-list ingester; +https://github.com/go-make-bytes/trust-anchor)")
 
 	resp, err := f.client.Do(req)
 	if err != nil {

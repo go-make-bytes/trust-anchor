@@ -29,7 +29,27 @@ func Parse(raw []byte) (*TrustedList, error) {
 // Certificates decodes the X509Certificate digital identities, skipping
 // non-X509 identity forms (X509SubjectName, X509SKI, KeyValue, …).
 func (s ServiceDigitalIdentity) Certificates() ([]*x509.Certificate, error) {
-	var out []*x509.Certificate
+	ders, err := s.CertificateDERs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*x509.Certificate, 0, len(ders))
+	for _, der := range ders {
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, fmt.Errorf("tsl: parse X509Certificate digital identity: %w", err)
+		}
+		out = append(out, cert)
+	}
+	return out, nil
+}
+
+// CertificateDERs decodes the X509Certificate digital identities to their
+// DER bytes without parsing them, so a caller can still fingerprint and
+// describe a certificate the certificate parser refuses. Non-X509 identity
+// forms are skipped as in Certificates.
+func (s ServiceDigitalIdentity) CertificateDERs() ([][]byte, error) {
+	var out [][]byte
 	for _, id := range s.DigitalIDs {
 		if id.X509Certificate == "" {
 			continue
@@ -38,11 +58,7 @@ func (s ServiceDigitalIdentity) Certificates() ([]*x509.Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tsl: decode X509Certificate digital identity: %w", err)
 		}
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			return nil, fmt.Errorf("tsl: parse X509Certificate digital identity: %w", err)
-		}
-		out = append(out, cert)
+		out = append(out, der)
 	}
 	return out, nil
 }

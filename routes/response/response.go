@@ -40,6 +40,12 @@ type TerritorySummary struct {
 	Failed            bool       `json:"failed,omitempty"`
 	FailureReason     string     `json:"failureReason,omitempty"`
 	AnchorCount       int        `json:"anchorCount"`
+	// SkippedCount and Skipped name the accepted services of this list whose
+	// certificate did not become an anchor — how far the served set is
+	// narrower than the list, and why. Health, not content: never part of
+	// the snapshot id.
+	SkippedCount int                    `json:"skippedCount"`
+	Skipped      []trust.SkippedService `json:"skipped,omitempty"`
 }
 
 // BootstrapSummary describes the active OJEU bootstrap set.
@@ -95,6 +101,8 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 			Failed:            t.Failed,
 			FailureReason:     t.FailureReason,
 			AnchorCount:       len(t.Anchors),
+			SkippedCount:      len(t.Skipped),
+			Skipped:           t.Skipped,
 		})
 	}
 	if boot != nil {
