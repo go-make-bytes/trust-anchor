@@ -427,9 +427,18 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		return nil, err
 	}
 	for _, w := range src.warnings {
-		p.log.Warn("skipped trust service during extraction",
+		fields := []zap.Field{
 			zap.String("territory", code), zap.String("tsp", w.TSPName),
-			zap.String("service", w.ServiceName), zap.String("reason", w.Reason))
+			zap.String("service", w.ServiceName), zap.String("reason", w.Reason),
+		}
+		if w.Code != "" {
+			// A per-service skip; the aggregate type warnings carry none of these.
+			fields = append(fields, zap.String("skip_reason", w.Code), zap.String("fingerprint", w.FingerprintSHA256))
+			if w.KeyAlgorithm != "" {
+				fields = append(fields, zap.String("key_algorithm", w.KeyAlgorithm), zap.String("curve", w.Curve))
+			}
+		}
+		p.log.Warn("skipped trust service during extraction", fields...)
 	}
 
 	tl := src.list
@@ -440,6 +449,10 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		NextUpdate:   tl.SchemeInformation.NextUpdate.DateTime,
 		SourceDigest: raw.Digest, // == published .sha2; drives next cycle's skip
 		Anchors:      anchors,
+		// The per-service skips ride with the territory as data, so a list
+		// that yields fewer anchors than it declares is visible on the API,
+		// in the inventory and on the metrics surface — not only in this log.
+		Skipped: trust.Skipped(src.warnings),
 	}
 	// Stamp every TL-sourced anchor with the territory's TLSequence (T1:
 	// additive Anchor.TLSequence). Overlay/internal anchors are never routed

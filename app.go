@@ -1,4 +1,4 @@
-// Package trustanchor is the eSignature-Portal trust-anchor service: it
+// Package trustanchor is the trust-anchor service: it
 // ingests the EU LOTL and the configured national trusted lists (ETSI TS
 // 119 612), verifies their XML signatures against pinned signer sets,
 // extracts the qualified CA certificates and serves versioned PEM bundles to

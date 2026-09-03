@@ -427,3 +427,48 @@ func TestSnapshotEndpointNamesFailedTerritories(t *testing.T) {
 	qt.Check(t, qt.Equals(de.FailureReason, "unreachable"))
 	qt.Check(t, qt.Equals(de.AnchorCount, 0))
 }
+
+// The snapshot summary names what each list declares and the bundle does not
+// carry: per territory, the skipped services with their reason and key, and
+// a count — so a consumer can tell "Germany: 81 anchors" from "Germany: 81
+// anchors, 12 declared services missing".
+func TestSnapshotNamesSkippedServices(t *testing.T) {
+	ta, app, snap := testApp(t)
+	defer ta.Stop()
+	tc := ta.TestClient()
+
+	narrowed := testSnapshot(t)
+	narrowed.Territories[0].Skipped = []trust.SkippedService{{
+		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
+		Reason: trust.SkipUnsupportedKey, Detail: "invalid X509 digital identity: x509: unsupported elliptic curve",
+		FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
+	}}
+	narrowed.Pending = snap.Pending
+	narrowed.ComputeID()
+	app.Manager().SetRefresher(&fakeRefresher{snap: narrowed})
+
+	resp, err := tc.Post("/v1/refresh", nil, tc.WithHeader("X-Test-Scopes", "trust:admin"))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+
+	resp, err = tc.Get("/v1/snapshot", tc.WithHeader("X-Test-Scopes", "trust:read"))
+	qt.Assert(t, qt.IsNil(err))
+	var out response.Snapshot
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &out)))
+	var hit *response.TerritorySummary
+	for i := range out.Territories {
+		if out.Territories[i].Code == narrowed.Territories[0].Code {
+			hit = &out.Territories[i]
+		} else {
+			qt.Check(t, qt.Equals(out.Territories[i].SkippedCount, 0))
+			qt.Check(t, qt.IsNil(out.Territories[i].Skipped))
+		}
+	}
+	qt.Assert(t, qt.IsNotNil(hit))
+	qt.Check(t, qt.Equals(hit.SkippedCount, 1))
+	qt.Assert(t, qt.Equals(len(hit.Skipped), 1))
+	qt.Check(t, qt.Equals(hit.Skipped[0].Reason, trust.SkipUnsupportedKey))
+	qt.Check(t, qt.Equals(hit.Skipped[0].Curve, "brainpoolP256r1"))
+	qt.Check(t, qt.Equals(hit.Skipped[0].FingerprintSHA256, "23395de6"))
+	qt.Check(t, qt.Equals(hit.Skipped[0].TSPName, "D-Trust GmbH"))
+}

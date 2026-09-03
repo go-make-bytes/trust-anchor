@@ -41,13 +41,48 @@ func inventoryAnchors(anchors []trust.Anchor) []inventoryAnchor {
 	return out
 }
 
+// inventorySkipped is the per-service projection logged for a skipped trust
+// service: which list, which provider and service, why, and what the
+// certificate bytes could still say about the key.
+type inventorySkipped struct {
+	Territory    string `json:"territory"`
+	Name         string `json:"name"`
+	Service      string `json:"service"`
+	Reason       string `json:"reason"`
+	SHA256       string `json:"sha256,omitempty"`
+	KeyAlgorithm string `json:"keyAlgorithm,omitempty"`
+	Curve        string `json:"curve,omitempty"`
+}
+
+// inventorySkippedServices projects every territory's skipped services for
+// logging.
+func inventorySkippedServices(s *trust.Snapshot) []inventorySkipped {
+	var out []inventorySkipped
+	for _, t := range s.Territories {
+		for _, sk := range t.Skipped {
+			out = append(out, inventorySkipped{
+				Territory:    t.Code,
+				Name:         sk.TSPName,
+				Service:      sk.ServiceName,
+				Reason:       sk.Reason,
+				SHA256:       sk.FingerprintSHA256,
+				KeyAlgorithm: sk.KeyAlgorithm,
+				Curve:        sk.Curve,
+			})
+		}
+	}
+	return out
+}
+
 // logInventory writes the one structured trust-inventory event: declared
 // trust is named (every operator-declared anchor in full — an anchor
 // declared in one file on one disk has no other record), derived trust is
 // counted (trusted-list anchors are in published, signed, re-fetchable
 // lists — per-territory and per-type counts suffice, and stay bounded as
-// the published trust infrastructure grows). Emitted at startup and on any
-// change to the declared set.
+// the published trust infrastructure grows). A skipped service is named
+// too: it is an anchor the list declares and the bundle does not carry,
+// and nothing else in the served data records that absence. Emitted at
+// startup and on any change to the declared set.
 func logInventory(log *zap.Logger, s *trust.Snapshot, rep trust.DeclaredReport) {
 	if log == nil || s == nil {
 		return
@@ -61,6 +96,7 @@ func logInventory(log *zap.Logger, s *trust.Snapshot, rep trust.DeclaredReport) 
 			derivedByType[a.Type]++
 		}
 	}
+	skipped := inventorySkippedServices(s)
 
 	fields := []zap.Field{
 		zap.String("snapshot", s.ID),
@@ -69,12 +105,16 @@ func logInventory(log *zap.Logger, s *trust.Snapshot, rep trust.DeclaredReport) 
 		zap.Any("derived_territory_counts", derivedByTerritory),
 		zap.Any("derived_type_counts", derivedByType),
 		zap.Int("pending_count", len(s.Pending)),
+		zap.Int("skipped_count", len(skipped)),
 	}
 	if rep.Internal.Error != "" {
 		fields = append(fields, zap.String("internal_error", rep.Internal.Error))
 	}
 	if len(s.Internal) > 0 {
 		fields = append(fields, zap.Any("internal_anchors", inventoryAnchors(s.Internal)))
+	}
+	if len(skipped) > 0 {
+		fields = append(fields, zap.Any("skipped_services", skipped))
 	}
 	log.Info("trust inventory", fields...)
 }

@@ -84,7 +84,9 @@ type Configuration struct {
 	// store is authoritative and this path is ignored.
 	BootstrapCertsPath string `mapstructure:"lotl_bootstrap_certs_path"`
 
-	// TerritoriesRaw is the comma-separated territory list (e.g. "LV,EE").
+	// TerritoriesRaw is the comma-separated territory list: ISO 3166-1 alpha-2
+	// codes and/or the group "EU" (every territory the verified LOTL points
+	// to). Default "EU".
 	TerritoriesRaw string `mapstructure:"trust_territories" validate:"required"`
 	// AllowHTTPTerritoriesRaw is the comma-separated list of territories whose
 	// trusted list may be fetched over plain http (default empty — https
@@ -164,7 +166,7 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("trust_admin_key", "TRUST_ADMIN_KEY")
 
 	v.SetDefault("lotl_url", "https://ec.europa.eu/tools/lotl/eu-lotl.xml")
-	v.SetDefault("trust_territories", "LV,EE")
+	v.SetDefault("trust_territories", "EU")
 	v.SetDefault("trust_accepted_statuses", "granted")
 	v.SetDefault("trust_service_types", "CA/QC")
 	v.SetDefault("trust_refresh_interval", 6*time.Hour)

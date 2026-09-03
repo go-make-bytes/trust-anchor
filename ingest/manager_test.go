@@ -2,11 +2,14 @@ package ingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/go-make-bytes/trust-anchor/events"
 	"github.com/go-make-bytes/trust-anchor/store"
@@ -234,5 +237,100 @@ func TestManagerAdoptsTerritoryHealthFlip(t *testing.T) {
 	}
 	if v, ok := metricValue(buf, `trust_territory_failed{territory="LV"}`); !ok || v != 0 {
 		t.Fatalf(`trust_territory_failed LV = %v (present=%v), want 0`, v, ok)
+	}
+}
+
+// skippedSnapshot is managerSnapshot with two German-shaped skips on LV.
+func skippedSnapshot(t *testing.T) *trust.Snapshot {
+	t.Helper()
+	snap := managerSnapshot(t)
+	snap.Territories[0].Skipped = []trust.SkippedService{
+		{TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)", Reason: trust.SkipUnsupportedKey,
+			FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1"},
+		{TSPName: "Deutsche Telekom AG", ServiceName: "Qualified.ID", Reason: trust.SkipUnsupportedKey,
+			FingerprintSHA256: "cc9d4dcc", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1"},
+	}
+	snap.ComputeID()
+	return snap
+}
+
+// TestManagerServesSkippedServicesGauge: the skipped set rides outside the
+// content id, so a cycle whose only change is what got skipped must still be
+// adopted (a narrowing is a change), the gauge must count it per territory
+// and reason while served, and drop to 0 — not linger — once the skips are
+// gone.
+func TestManagerServesSkippedServicesGauge(t *testing.T) {
+	snap := skippedSnapshot(t)
+	fake := &fakeRefresher{snap: snap}
+	m, st := managerForTest(t, fake)
+	seedBootstrap(t, st)
+	if err := m.Initialize(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+	const series = `trust_services_skipped{territory="LV",reason="unsupported-key"}`
+	if v, ok := metricValue(gatherMetrics(), series); !ok || v != 2 {
+		t.Fatalf("%s = %v (present=%v), want 2", series, v, ok)
+	}
+	if lv := m.Active().Territory("LV"); len(lv.Skipped) != 2 {
+		t.Fatalf("served LV skipped = %+v, want 2 entries", lv.Skipped)
+	}
+
+	clean := managerSnapshot(t)
+	if clean.ID != snap.ID {
+		t.Fatal("test premise broken: the skipped set moved the content id")
+	}
+	fake.snap = clean
+	out := m.Refresh(context.Background())
+	if out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+	if !out.Changed {
+		t.Fatal("skipped set vanishing not reported as a change")
+	}
+	if v, ok := metricValue(gatherMetrics(), series); !ok || v != 0 {
+		t.Fatalf("%s = %v (present=%v), want 0 after the skips vanished", series, v, ok)
+	}
+	if lv := m.Active().Territory("LV"); len(lv.Skipped) != 0 {
+		t.Fatalf("served LV skipped = %+v, want none", lv.Skipped)
+	}
+}
+
+// TestBootInventoryNamesSkippedServices: a skipped service is an anchor the
+// list declares and the bundle does not carry — the inventory names it
+// (territory, provider, service, reason, fingerprint, key) rather than
+// folding it into a count.
+func TestBootInventoryNamesSkippedServices(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	st := store.NewMemory()
+	m := NewManager(&fakeRefresher{}, st, events.New(zap.NewNop()), zap.New(core))
+	seedBootstrap(t, st)
+	if err := st.SaveSnapshot(context.Background(), skippedSnapshot(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Initialize(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	m.ReconcileDeclared(context.Background())
+
+	entries := inventoryEntries(logs)
+	if len(entries) != 1 {
+		t.Fatalf("boot inventory entries = %d, want exactly 1", len(entries))
+	}
+	e := entries[0]
+	if got := inventoryField(t, e, "skipped_count"); got != int64(2) {
+		t.Fatalf("skipped_count = %v, want 2", got)
+	}
+	named, err := json.Marshal(inventoryField(t, e, "skipped_services"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"territory":"LV"`, `"name":"D-Trust GmbH"`, `"service":"Qualified.ID"`,
+		`"reason":"unsupported-key"`, `"sha256":"23395de6"`, `"keyAlgorithm":"ecdsa"`, `"curve":"brainpoolP256r1"`} {
+		if !strings.Contains(string(named), want) {
+			t.Errorf("skipped_services %s lacks %s", named, want)
+		}
 	}
 }

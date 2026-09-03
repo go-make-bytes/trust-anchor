@@ -1,6 +1,9 @@
 package trust
 
 import (
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"strings"
@@ -23,11 +26,84 @@ func NormalizeStatus(s string) string {
 }
 
 // ExtractionWarning records a service that was skipped during extraction.
+// A per-service skip carries a Code from the closed Skip* set plus whatever
+// the certificate bytes yielded (fingerprint, key algorithm, curve); an
+// aggregate warning (services of an unaccepted type, counted per type) has
+// no Code and no service.
 type ExtractionWarning struct {
 	TSPName     string
 	ServiceName string
 	Reason      string
+
+	Code              string
+	FingerprintSHA256 string
+	KeyAlgorithm      string
+	Curve             string
 }
+
+// Skipped projects the per-service warnings (those with a Code) into the
+// named skipped-service entries a territory carries. Aggregate warnings stay
+// counts in the log.
+func Skipped(warnings []ExtractionWarning) []SkippedService {
+	var out []SkippedService
+	for _, w := range warnings {
+		if w.Code == "" {
+			continue
+		}
+		out = append(out, SkippedService{
+			TSPName:           w.TSPName,
+			ServiceName:       w.ServiceName,
+			Reason:            w.Code,
+			Detail:            w.Reason,
+			FingerprintSHA256: w.FingerprintSHA256,
+			KeyAlgorithm:      w.KeyAlgorithm,
+			Curve:             w.Curve,
+		})
+	}
+	return out
+}
+
+// identityCertificates decodes the X509Certificate identities of one
+// service, certificate by certificate: the parseable ones are returned, and
+// each one that is not becomes a warning naming the service, the reason and
+// what the bytes could still tell (fingerprint, key algorithm, curve). A
+// service is never dropped whole because one of its identities failed.
+func identityCertificates(tspName, serviceName string, sdi tsl.ServiceDigitalIdentity) ([]*x509.Certificate, []ExtractionWarning) {
+	ders, err := sdi.CertificateDERs()
+	if err != nil {
+		return nil, []ExtractionWarning{{
+			TSPName: tspName, ServiceName: serviceName,
+			Code: SkipInvalidCertificate, Reason: "invalid X509 digital identity: " + err.Error(),
+		}}
+	}
+	var certs []*x509.Certificate
+	var warnings []ExtractionWarning
+	for _, der := range ders {
+		cert, err := x509.ParseCertificate(der)
+		if err == nil {
+			certs = append(certs, cert)
+			continue
+		}
+		sum := sha256.Sum256(der)
+		w := ExtractionWarning{
+			TSPName: tspName, ServiceName: serviceName,
+			Code:              SkipInvalidCertificate,
+			Reason:            "invalid X509 digital identity: " + err.Error(),
+			FingerprintSHA256: hex.EncodeToString(sum[:]),
+		}
+		w.KeyAlgorithm, w.Curve = spkiAlgorithm(der)
+		if strings.Contains(err.Error(), unsupportedCurveMessage) {
+			w.Code = SkipUnsupportedKey
+		}
+		warnings = append(warnings, w)
+	}
+	return certs, warnings
+}
+
+// unsupportedCurveMessage is the standard library's refusal of an EC public
+// key on a curve it does not implement — the one parse failure that means
+// "well-formed, unsupported" rather than "malformed".
+const unsupportedCurveMessage = "unsupported elliptic curve"
 
 // ExtractAnchors pulls the trust anchors out of a verified national trusted
 // list: every TSPService whose ServiceTypeIdentifier is in acceptedTypes
@@ -78,10 +154,7 @@ func ExtractAnchors(tl *tsl.TrustedList, territory string, acceptedStatuses, acc
 			if _, ok := types[info.TypeIdentifier]; !ok {
 				continue
 			}
-			certs, err := info.DigitalIdentity.Certificates()
-			if err != nil || len(certs) == 0 {
-				continue
-			}
+			certs, _ := identityCertificates("", "", info.DigitalIdentity)
 			for _, cert := range certs {
 				fp := Fingerprint(cert)
 				if statusesByCert[fp] == nil {
@@ -110,13 +183,16 @@ func ExtractAnchors(tl *tsl.TrustedList, territory string, acceptedStatuses, acc
 				continue
 			}
 
-			certs, err := info.DigitalIdentity.Certificates()
-			if err != nil {
-				warnings = append(warnings, ExtractionWarning{TSPName: tspName, ServiceName: info.Name.String(), Reason: "invalid X509 digital identity: " + err.Error()})
+			certs, skipped := identityCertificates(tspName, info.Name.String(), info.DigitalIdentity)
+			warnings = append(warnings, skipped...)
+			if len(certs) == 0 && len(skipped) == 0 {
+				warnings = append(warnings, ExtractionWarning{
+					TSPName: tspName, ServiceName: info.Name.String(),
+					Code: SkipNoCertificate, Reason: "no X509Certificate digital identity",
+				})
 				continue
 			}
 			if len(certs) == 0 {
-				warnings = append(warnings, ExtractionWarning{TSPName: tspName, ServiceName: info.Name.String(), Reason: "no X509Certificate digital identity"})
 				continue
 			}
 
@@ -189,9 +265,11 @@ func ExtractAnchors(tl *tsl.TrustedList, territory string, acceptedStatuses, acc
 			if !conflicted[a.FingerprintSHA256] {
 				conflicted[a.FingerprintSHA256] = true
 				warnings = append(warnings, ExtractionWarning{
-					TSPName:     a.TSPName,
-					ServiceName: a.ServiceName,
-					Reason:      fmt.Sprintf("conflicting statuses across duplicate service entries for certificate %s — anchor dropped (fail closed)", a.FingerprintSHA256),
+					TSPName:           a.TSPName,
+					ServiceName:       a.ServiceName,
+					Code:              SkipStatusConflict,
+					FingerprintSHA256: a.FingerprintSHA256,
+					Reason:            fmt.Sprintf("conflicting statuses across duplicate service entries for certificate %s — anchor dropped (fail closed)", a.FingerprintSHA256),
 				})
 			}
 			continue
