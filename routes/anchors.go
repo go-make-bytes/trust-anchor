@@ -19,31 +19,38 @@ const (
 )
 
 // bundleQuery reads the shared bundle filter parameters.
-func (r *router) bundleQuery(ctx *azugo.Context) (territories []string, use string, qscdOnly bool, anchorType string, ok bool) {
+func (r *router) bundleQuery(ctx *azugo.Context) (territories []string, use string, qscdOnly bool, anchorType, keys string, ok bool) {
 	territories = ctx.Query.Values("territory")
 	if u := ctx.Query.StringOptional("use"); u != nil {
 		use = *u
 	}
 	if !trust.ValidUse(use) {
 		ctx.Error(azugo.ParamInvalidError{Name: "use", Tag: "oneof"})
-		return nil, "", false, "", false
+		return nil, "", false, "", "", false
 	}
 	if ty := ctx.Query.StringOptional("type"); ty != nil {
 		anchorType = *ty
 	}
 	if anchorType != "" && !trust.ValidAnchorType(anchorType) {
 		ctx.Error(azugo.ParamInvalidError{Name: "type", Tag: "oneof"})
-		return nil, "", false, "", false
+		return nil, "", false, "", "", false
 	}
 	q, err := ctx.Query.BoolOptional("qscdOnly")
 	if err != nil {
 		ctx.Error(azugo.ParamInvalidError{Name: "qscdOnly", Tag: "bool", Err: err})
-		return nil, "", false, "", false
+		return nil, "", false, "", "", false
 	}
 	if q != nil {
 		qscdOnly = *q
 	}
-	return territories, use, qscdOnly, anchorType, true
+	if k := ctx.Query.StringOptional("keys"); k != nil {
+		keys = *k
+	}
+	if !trust.ValidKeys(keys) {
+		ctx.Error(azugo.ParamInvalidError{Name: "keys", Tag: "oneof"})
+		return nil, "", false, "", "", false
+	}
+	return territories, use, qscdOnly, anchorType, keys, true
 }
 
 // snapshotForServing returns the active snapshot or responds 503.
@@ -116,6 +123,7 @@ func setBundleHeaders(ctx *azugo.Context, snap *trust.Snapshot, stale bool) {
 // @param use query string false "signature | authentication | seal | website"
 // @param qscdOnly query bool false "Only QCWithQSCD-qualified services"
 // @param type query string false "EUDI anchor type (see AnchorTypes); default legacy CA/QC (untyped) anchors only"
+// @param keys query string false "common (default: keys every consumer can parse) | all (held anchors too, e.g. Brainpool-curve keys)"
 // @success 200 string string "PEM bundle"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"
@@ -129,7 +137,7 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 	if snap == nil {
 		return
 	}
-	territories, use, qscdOnly, anchorType, ok := r.bundleQuery(ctx)
+	territories, use, qscdOnly, anchorType, keys, ok := r.bundleQuery(ctx)
 	if !ok {
 		return
 	}
@@ -141,7 +149,7 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 		return
 	}
 
-	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType)
+	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType, keys)
 	if err != nil {
 		ctx.Error(filterParamError(anchorType))
 		return
@@ -159,6 +167,7 @@ func (r *router) anchorsPEM(ctx *azugo.Context) {
 // @param use query string false "signature | authentication | seal | website"
 // @param qscdOnly query bool false "Only QCWithQSCD-qualified services"
 // @param type query string false "EUDI anchor type (see AnchorTypes); default legacy CA/QC (untyped) anchors only"
+// @param keys query string false "common (default: keys every consumer can parse) | all (held anchors too, e.g. Brainpool-curve keys)"
 // @success 200 AnchorsResponse response.Anchors "Bundle with metadata"
 // @failure 401 {empty} "Unauthorized"
 // @failure 403 {empty} "Forbidden"
@@ -172,7 +181,7 @@ func (r *router) anchorsJSON(ctx *azugo.Context) {
 	if snap == nil {
 		return
 	}
-	territories, use, qscdOnly, anchorType, ok := r.bundleQuery(ctx)
+	territories, use, qscdOnly, anchorType, keys, ok := r.bundleQuery(ctx)
 	if !ok {
 		return
 	}
@@ -184,7 +193,7 @@ func (r *router) anchorsJSON(ctx *azugo.Context) {
 		return
 	}
 
-	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType)
+	anchors, err := trust.Filter(snap, territories, use, qscdOnly, anchorType, keys)
 	if err != nil {
 		ctx.Error(filterParamError(anchorType))
 		return

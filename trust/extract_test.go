@@ -1,6 +1,7 @@
 package trust
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -400,12 +401,13 @@ func skipFor(t *testing.T, warnings []ExtractionWarning, service string) Extract
 }
 
 // A granted CA/QC service whose certificate carries a key the parser cannot
-// interpret is skipped AS DATA: named, fingerprinted over the listed bytes,
-// its key algorithm and curve read structurally, under the closed reason
-// unsupported-key — while a sibling service with a parseable key is
-// extracted as before. This is the German-list shape (twelve brainpool
-// services among hundreds), reproduced with one synthetic certificate.
-func TestExtractReportsUnsupportedKeyAsSkippedService(t *testing.T) {
+// interpret is HELD as an anchor, read structurally: same fingerprint over
+// the listed bytes, subject and validity from the certificate body, its key
+// named (ecdsa / brainpoolP256r1) and KeyCommon false — while the sibling
+// with a parseable key is a common anchor. Nothing is skipped. This is the
+// German-list shape (twelve brainpool services among hundreds), reproduced
+// with one synthetic certificate; the real one is in certbody_test.go.
+func TestExtractHoldsUnsupportedKeyAsAnchor(t *testing.T) {
 	bp := brainpoolCertDER(t, "D-TRUST Qualified CA brainpool")
 	good := testCert(t, "D-TRUST Qualified CA P-256")
 	tl := serviceTL(
@@ -417,29 +419,34 @@ func TestExtractReportsUnsupportedKeyAsSkippedService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(anchors) != 1 || anchors[0].FingerprintSHA256 != Fingerprint(good) {
-		t.Fatalf("anchors = %+v, want exactly the parseable sibling", anchors)
+	if got := Skipped(warnings); len(got) != 0 {
+		t.Fatalf("skipped = %+v, want none — an unsupported key is held, not skipped", got)
 	}
-
-	w := skipFor(t, warnings, "D-Trust remote signature service (sign-me)")
+	if len(anchors) != 2 {
+		t.Fatalf("anchors = %d, want 2 (held + common)", len(anchors))
+	}
 	sum := sha256.Sum256(bp)
-	want := ExtractionWarning{
-		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
-		Code: SkipUnsupportedKey, FingerprintSHA256: hex.EncodeToString(sum[:]),
-		KeyAlgorithm: KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
+	var held, common *Anchor
+	for i := range anchors {
+		switch anchors[i].FingerprintSHA256 {
+		case hex.EncodeToString(sum[:]):
+			held = &anchors[i]
+		case Fingerprint(good):
+			common = &anchors[i]
+		}
 	}
-	if w.TSPName != want.TSPName || w.Code != want.Code || w.FingerprintSHA256 != want.FingerprintSHA256 ||
-		w.KeyAlgorithm != want.KeyAlgorithm || w.Curve != want.Curve {
-		t.Fatalf("skip = %+v\nwant  %+v (reason text aside)", w, want)
+	if held == nil || common == nil {
+		t.Fatalf("anchors = %+v, want the held brainpool one and the common P-256 one", anchors)
 	}
-	if !strings.Contains(w.Reason, unsupportedCurveMessage) {
-		t.Fatalf("skip reason %q does not carry the parser's message", w.Reason)
+	if held.KeyAlgorithm != KeyAlgorithmECDSA || held.Curve != "brainpoolP256r1" || held.KeyCommon() {
+		t.Fatalf("held anchor key = (%q, %q) common=%v", held.KeyAlgorithm, held.Curve, held.KeyCommon())
 	}
-
-	skipped := Skipped(warnings)
-	if len(skipped) != 1 || skipped[0].Reason != SkipUnsupportedKey || skipped[0].Curve != "brainpoolP256r1" ||
-		skipped[0].FingerprintSHA256 != want.FingerprintSHA256 || skipped[0].Detail != w.Reason {
-		t.Fatalf("Skipped() = %+v", skipped)
+	if held.Subject != "CN=D-TRUST Qualified CA brainpool,O=synthetic fixture" || !bytes.Equal(held.CertDER, bp) ||
+		held.NotBefore.Year() != 2026 || held.NotAfter.Year() != 2036 || held.ServiceName != "D-Trust remote signature service (sign-me)" {
+		t.Fatalf("held anchor = %+v", *held)
+	}
+	if common.KeyAlgorithm != KeyAlgorithmECDSA || common.Curve != "P-256" || !common.KeyCommon() {
+		t.Fatalf("common anchor key = (%q, %q) common=%v", common.KeyAlgorithm, common.Curve, common.KeyCommon())
 	}
 }
 

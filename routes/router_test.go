@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -440,7 +442,7 @@ func TestSnapshotNamesSkippedServices(t *testing.T) {
 	narrowed := testSnapshot(t)
 	narrowed.Territories[0].Skipped = []trust.SkippedService{{
 		TSPName: "D-Trust GmbH", ServiceName: "D-Trust remote signature service (sign-me)",
-		Reason: trust.SkipUnsupportedKey, Detail: "invalid X509 digital identity: x509: unsupported elliptic curve",
+		Reason: trust.SkipInvalidCertificate, Detail: "invalid X509 digital identity: x509: RSA modulus is not a positive number",
 		FingerprintSHA256: "23395de6", KeyAlgorithm: trust.KeyAlgorithmECDSA, Curve: "brainpoolP256r1",
 	}}
 	narrowed.Pending = snap.Pending
@@ -467,8 +469,109 @@ func TestSnapshotNamesSkippedServices(t *testing.T) {
 	qt.Assert(t, qt.IsNotNil(hit))
 	qt.Check(t, qt.Equals(hit.SkippedCount, 1))
 	qt.Assert(t, qt.Equals(len(hit.Skipped), 1))
-	qt.Check(t, qt.Equals(hit.Skipped[0].Reason, trust.SkipUnsupportedKey))
+	qt.Check(t, qt.Equals(hit.Skipped[0].Reason, trust.SkipInvalidCertificate))
 	qt.Check(t, qt.Equals(hit.Skipped[0].Curve, "brainpoolP256r1"))
 	qt.Check(t, qt.Equals(hit.Skipped[0].FingerprintSHA256, "23395de6"))
 	qt.Check(t, qt.Equals(hit.Skipped[0].TSPName, "D-Trust GmbH"))
+}
+
+// heldSnapshot is testSnapshot with one extra LV anchor whose key is on a
+// Brainpool curve — held: in the snapshot, outside the default bundle.
+func heldSnapshot(t *testing.T) *trust.Snapshot {
+	t.Helper()
+	snap := testSnapshot(t)
+	held := testAnchor(t, "LV", "lv-brainpool", []string{trust.UseSignature}, true)
+	held.KeyAlgorithm, held.Curve = trust.KeyAlgorithmECDSA, "brainpoolP256r1"
+	for _, tt := range snap.Territories {
+		if tt.Code == "LV" {
+			tt.Anchors = append(tt.Anchors, held)
+		}
+	}
+	snap.ComputeID()
+	return snap
+}
+
+// The keys filter: the default bundle is exactly the common-key set, keys=all
+// adds the held anchors on both routes, an unknown value is 422, and the
+// snapshot summary counts the held anchors per territory.
+func TestAnchorsKeysFilterHoldsBrainpool(t *testing.T) {
+	ta, app, snap := testApp(t)
+	defer ta.Stop()
+	tc := ta.TestClient()
+
+	narrowed := heldSnapshot(t)
+	narrowed.Pending = snap.Pending
+	app.Manager().SetRefresher(&fakeRefresher{snap: narrowed})
+	resp, err := tc.Post("/v1/refresh", nil, tc.WithHeader("X-Test-Scopes", "trust:admin"))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+
+	getJSON := func(query map[string]any) *response.Anchors {
+		t.Helper()
+		resp, err := tc.Get("/v1/anchors.json", tc.WithHeader("X-Test-Scopes", "trust:read"), tc.WithQuery(query))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+		var out response.Anchors
+		qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &out)))
+		return &out
+	}
+	names := func(a *response.Anchors) []string {
+		var out []string
+		for _, x := range a.Anchors {
+			out = append(out, x.ServiceName)
+		}
+		return out
+	}
+
+	def := getJSON(map[string]any{"territory": "LV"})
+	qt.Check(t, qt.Equals(len(def.Anchors), 2))
+	qt.Check(t, qt.IsFalse(slices.Contains(names(def), "lv-brainpool")))
+	common := getJSON(map[string]any{"territory": "LV", "keys": "common"})
+	qt.Check(t, qt.Equals(len(common.Anchors), 2))
+
+	all := getJSON(map[string]any{"territory": "LV", "keys": "all"})
+	qt.Check(t, qt.Equals(len(all.Anchors), 3))
+	qt.Check(t, qt.IsTrue(slices.Contains(names(all), "lv-brainpool")))
+	for _, a := range all.Anchors {
+		if a.ServiceName == "lv-brainpool" {
+			qt.Check(t, qt.Equals(a.KeyAlgorithm, trust.KeyAlgorithmECDSA))
+			qt.Check(t, qt.Equals(a.Curve, "brainpoolP256r1"))
+		} else {
+			qt.Check(t, qt.Equals(a.Curve, "")) // synthetic P-256 anchors built directly carry no key names
+		}
+	}
+
+	// PEM route: the default bundle has two blocks for LV, keys=all three.
+	countPEM := func(query map[string]any) int {
+		t.Helper()
+		resp, err := tc.Get("/v1/anchors", tc.WithHeader("X-Test-Scopes", "trust:read"), tc.WithQuery(query))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(resp.StatusCode(), fasthttp.StatusOK))
+		return strings.Count(string(read(t, resp)), "-----BEGIN CERTIFICATE-----")
+	}
+	qt.Check(t, qt.Equals(countPEM(map[string]any{"territory": "LV"}), 2))
+	qt.Check(t, qt.Equals(countPEM(map[string]any{"territory": "LV", "keys": "all"}), 3))
+
+	// Unknown keys value → 422, on both routes.
+	for _, route := range []string{"/v1/anchors", "/v1/anchors.json"} {
+		resp, err := tc.Get(route, tc.WithHeader("X-Test-Scopes", "trust:read"), tc.WithQuery(map[string]any{"keys": "bogus"}))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Check(t, qt.Equals(resp.StatusCode(), fasthttp.StatusUnprocessableEntity))
+		fasthttp.ReleaseResponse(resp)
+	}
+
+	// Snapshot summary: LV holds one, EE none.
+	resp, err = tc.Get("/v1/snapshot", tc.WithHeader("X-Test-Scopes", "trust:read"))
+	qt.Assert(t, qt.IsNil(err))
+	var sum response.Snapshot
+	qt.Assert(t, qt.IsNil(json.Unmarshal(read(t, resp), &sum)))
+	for _, tt := range sum.Territories {
+		switch tt.Code {
+		case "LV":
+			qt.Check(t, qt.Equals(tt.HeldCount, 1))
+			qt.Check(t, qt.Equals(tt.AnchorCount, 3))
+		case "EE":
+			qt.Check(t, qt.Equals(tt.HeldCount, 0))
+		}
+	}
 }

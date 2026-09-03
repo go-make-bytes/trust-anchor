@@ -76,7 +76,7 @@ func TestInternalUntypedDeclarationLandsInLegacyBundle(t *testing.T) {
 	// And it is served in the legacy bundle (type filter empty), exactly like
 	// a TL-sourced CA/QC anchor.
 	s := &Snapshot{Internal: []Anchor{a}}
-	got, err := Filter(s, nil, "", false, "")
+	got, err := Filter(s, nil, "", false, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestInternalUntypedDeclarationLandsInLegacyBundle(t *testing.T) {
 		t.Fatalf("legacy bundle anchors = %d, want 1 (untyped internal must merge)", len(got))
 	}
 	// A typed request must NOT see it.
-	got, err = Filter(s, nil, "", false, "pid_provider")
+	got, err = Filter(s, nil, "", false, "pid_provider", "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,13 +36,22 @@ func ValidUse(use string) bool {
 // see ValidAnchorType). The type dimension is one dimension: an anchor's
 // Type is always derived from its published identifier (TypeKey), whether
 // it came from a trusted list or a declaration.
-func Filter(s *Snapshot, territories []string, use string, qscdOnly bool, anchorType string) ([]Anchor, error) {
+//
+// keys: "" or KeysCommon serves only anchors whose key every consumer can
+// parse (Anchor.KeyCommon) — the default, and byte-for-byte the bundle
+// served before held anchors existed; KeysAll adds the held ones. Any other
+// value is rejected.
+func Filter(s *Snapshot, territories []string, use string, qscdOnly bool, anchorType, keys string) ([]Anchor, error) {
 	if !ValidUse(use) {
 		return nil, fmt.Errorf("trust: invalid use %q (accepted: %s)", use, strings.Join(ValidUses, ", "))
 	}
 	if anchorType != "" && !ValidAnchorType(anchorType) {
 		return nil, fmt.Errorf("trust: invalid type %q", anchorType)
 	}
+	if !ValidKeys(keys) {
+		return nil, fmt.Errorf("trust: invalid keys %q (accepted: %s, %s)", keys, KeysCommon, KeysAll)
+	}
+	includeHeld := keys == KeysAll
 
 	include := func(code string) bool {
 		if len(territories) == 0 {
@@ -62,7 +71,7 @@ func Filter(s *Snapshot, territories []string, use string, qscdOnly bool, anchor
 			continue
 		}
 		for _, a := range t.Anchors {
-			if matches(a, use, qscdOnly, anchorType) {
+			if matches(a, use, qscdOnly, anchorType) && (includeHeld || a.KeyCommon()) {
 				out = append(out, a)
 			}
 		}
@@ -72,7 +81,7 @@ func Filter(s *Snapshot, territories []string, use string, qscdOnly bool, anchor
 	// typed internal anchor only ever appears in ITS type's bundle, and an
 	// untyped declaration lands in the untyped bundle like any TL CA.
 	for _, a := range s.Internal {
-		if matches(a, use, qscdOnly, anchorType) {
+		if matches(a, use, qscdOnly, anchorType) && (includeHeld || a.KeyCommon()) {
 			out = append(out, a)
 		}
 	}

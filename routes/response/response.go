@@ -46,6 +46,11 @@ type TerritorySummary struct {
 	// the snapshot id.
 	SkippedCount int                    `json:"skippedCount"`
 	Skipped      []trust.SkippedService `json:"skipped,omitempty"`
+	// HeldCount is how many of this territory's anchors are held — present
+	// in the snapshot but served only to a request with keys=all, because
+	// their public key (a Brainpool curve, say) is not one every consumer
+	// can parse.
+	HeldCount int `json:"heldCount"`
 }
 
 // BootstrapSummary describes the active OJEU bootstrap set.
@@ -103,6 +108,7 @@ func NewSnapshot(snap *trust.Snapshot, boot *trust.Bootstrap, now time.Time, gra
 			AnchorCount:       len(t.Anchors),
 			SkippedCount:      len(t.Skipped),
 			Skipped:           t.Skipped,
+			HeldCount:         heldCount(t.Anchors),
 		})
 	}
 	if boot != nil {
@@ -186,4 +192,15 @@ func NewRefresh(served *trust.Snapshot, changed, declaredChanged, declaredCarrie
 type Approved struct {
 	Snapshot    string `json:"snapshot,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+// heldCount counts the anchors outside the default (keys=common) bundle.
+func heldCount(anchors []trust.Anchor) int {
+	n := 0
+	for _, a := range anchors {
+		if !a.KeyCommon() {
+			n++
+		}
+	}
+	return n
 }
