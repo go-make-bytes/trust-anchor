@@ -128,7 +128,7 @@ flowchart TB
 
     subgraph Ingest["ingest/ — one cycle, stateless between cycles"]
         FET["fetcher — https allow-list, size cap, timeout"]
-        SRC["source adapters — EU LOTL (+ pivot walk) ·<br/>national TL (+ .sha2 skip): fetch → verify → extract"]
+        SRC["source adapters — EU LOTL (+ .sha2 skip, pivot walk) ·<br/>national TL (+ .sha2 skip): fetch → verify → extract"]
         PIP["pipeline — orchestration: LOTL → national TLs →<br/>declared anchors → snapshot → hold governance"]
         MGR["manager — active snapshot (atomic), fail-safe swap"]
     end
@@ -183,16 +183,21 @@ sequenceDiagram
 
     T->>M: Refresh(ctx)  (timer / NextUpdate / admin kick)
     M->>P: Refresh(prev snapshot, active bootstrap)
-    P->>F: fetch LOTL (https, allow-list, size cap)
-    F-->>P: raw LOTL bytes
-    P->>P: pre-parse (unverified) → pivot URLs only
-    P->>V: verify LOTL vs pinned signer set
-    alt direct verify fails
-        P->>F: fetch unprocessed pivots
-        P->>V: verify each pivot at its issue time → rotate signer set
-        P->>V: re-verify LOTL vs rotated signers
+    P->>F: fetch the LOTL's sibling .sha2 (only while the held LOTL is within its NextUpdate)
+    alt .sha2 matches the held LOTL
+        P->>P: no download — signer set + territory pointers carried from the previous snapshot
+    else digest changed · none published · held LOTL expired
+        P->>F: fetch LOTL (https, allow-list, size cap)
+        F-->>P: raw LOTL bytes
+        P->>P: pre-parse (unverified) → pivot URLs only
+        P->>V: verify LOTL vs pinned signer set
+        alt direct verify fails
+            P->>F: fetch unprocessed pivots
+            P->>V: verify each pivot at its issue time → rotate signer set
+            P->>V: re-verify LOTL vs rotated signers
+        end
+        V-->>P: signature-verified LOTL (canonical bytes) → territory pointers
     end
-    V-->>P: signature-verified LOTL (canonical bytes)
     loop each configured territory
         P->>F: fetch national TL (+ optional .sha2 skip check)
         P->>V: verify TL vs signer certs from the verified LOTL pointer
@@ -351,6 +356,8 @@ Server, logging, metrics and tracing settings are the framework's base configura
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` / `AUTH_JWKS_*` / `DPOP_*` | see [Auth modes](#auth-modes) | Inbound token validation; consulted only when `AUTH_MODE=dpop` |
 | `TRUST_ADMIN_KEY` | — | `AUTH_MODE=internal` only: the `X-API-Key` value that grants `trust:admin`. **Secret** — required (boot fails closed if empty), never logged. Supports the `TRUST_ADMIN_KEY_FILE` convention |
 
+Every cycle asks each publisher for the list's sibling `.sha2` digest first — the list of the lists included — and downloads a list only when the digest changed, none is published, or the held list has passed its `NextUpdate`; the digest decides only whether to download, never what to trust (trust comes from the XML signature of whatever is downloaded, and an expired list of the lists is refused on that path). A warm cycle against unchanged publishers is therefore a handful of 64-byte requests.
+
 Upstream egress is confined to exactly the LOTL host and the TL hosts discovered from the *verified* LOTL — https only, TLS verified, size-capped. Any non-https pointer raises `egress.violation` and that territory falls back to its last good data (or a failed entry when it has none). One narrow, explicit exception: a territory named in `TRUST_ALLOW_HTTP_TERRITORIES` may be fetched over its published plain-http pointer (Slovakia's LOTL pointer is http, and its https alternative serves a wrong-hostname certificate). List **integrity never rests on transport** — every fetched list is XMLDSig-verified against the LOTL-pinned signers before anything trusts it — so the opt-in waives only the defense-in-depth transport rule, per named territory, logged loudly on every cycle. It can never apply to the LOTL itself.
 
 ---
@@ -473,7 +480,7 @@ trust-anchor/
 │   └── response/                — API response DTOs
 ├── ingest/                      — one ingestion cycle
 │   ├── fetcher.go               — https allow-list, size cap, timeout, .sha2 digest fetch
-│   ├── source_lotl.go           — EU LOTL adapter (fetch → verify → pivot walk → extract pointers)
+│   ├── source_lotl.go           — EU LOTL adapter (.sha2 skip → fetch → verify → pivot walk → extract pointers)
 │   ├── source_national.go       — national TL adapter (.sha2 skip → fetch → verify → extract)
 │   ├── pipeline.go              — orchestration: LOTL → national TLs → declared → snapshot → hold
 │   ├── pivot.go                 — LOTL pivot-chain signer rotation

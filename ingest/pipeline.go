@@ -109,37 +109,37 @@ func sha256hex(b []byte) string {
 func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap) (*trust.Snapshot, error) {
 	now := p.now()
 
-	lotl, signers, pivotSeq, err := p.ingestLOTL(ctx, prev, boot, now)
+	res, err := p.ingestLOTL(ctx, prev, boot, now)
 	if err != nil {
 		return nil, err
 	}
 
-	if prev != nil && lotl.SchemeInformation.TSLSequenceNumber < prev.LOTLSequence {
-		return nil, fmt.Errorf("ingest: LOTL sequence regression: %d < %d", lotl.SchemeInformation.TSLSequenceNumber, prev.LOTLSequence)
+	if prev != nil && res.sequence < prev.LOTLSequence {
+		return nil, fmt.Errorf("ingest: LOTL sequence regression: %d < %d", res.sequence, prev.LOTLSequence)
 	}
 
 	next := &trust.Snapshot{
 		GeneratedAt:      now,
-		LOTLSequence:     lotl.SchemeInformation.TSLSequenceNumber,
-		LOTLIssueTime:    lotl.SchemeInformation.ListIssueDateTime,
-		LOTLNextUpdate:   lotl.SchemeInformation.NextUpdate.DateTime,
-		LOTLPivotSeq:     pivotSeq,
-		AdvertisedOJ:     advertisedOJReference(lotl.SchemeInformation.SchemeInformationURI.URI),
+		LOTLSequence:     res.sequence,
+		LOTLIssueTime:    res.issueTime,
+		LOTLNextUpdate:   res.nextUpdate,
+		LOTLSignersDER:   res.signersDER,
+		LOTLPivotSeq:     res.pivotSeq,
+		AdvertisedOJ:     res.advertisedOJ,
+		LOTLDigest:       res.digest,
+		LOTLPointers:     res.pointers.pointers(),
 		BootstrapOJRef:   boot.OJReference,
 		BootstrapVersion: boot.Version,
-	}
-	for _, c := range signers {
-		next.LOTLSignersDER = append(next.LOTLSignersDER, c.Raw)
 	}
 
 	// National trusted lists. Each territory is an independent upstream: one
 	// failing must not suppress the others, so failures accumulate as named
 	// failed entries instead of aborting the cycle. The floor below keeps
 	// the all-failed case a loud cycle failure.
-	territories := expandTerritories(p.cfg.Territories, lotl)
+	territories := expandTerritories(p.cfg.Territories, res.pointers)
 	withData := 0
 	for _, code := range territories {
-		t, err := p.ingestTerritory(ctx, lotl, code, prev, now)
+		t, err := p.ingestTerritory(ctx, res.pointers, code, prev, now)
 		if err != nil {
 			p.log.Warn("territory failed with no previous data — recorded as failed, cycle continues",
 				zap.String("territory", code), zap.Error(err))
@@ -177,12 +177,12 @@ func (p *Pipeline) Refresh(ctx context.Context, prev *trust.Snapshot, boot *trus
 const TerritoryGroupEU = "EU"
 
 // expandTerritories resolves the configured territory list against the
-// verified LOTL: the EU group expands to the LOTL's pointer territories,
-// explicit codes pass through, duplicates collapse. A code the LOTL has no
-// pointer for stays in the set and fails its ingest visibly (a failed entry)
-// rather than being dropped here — configured intent is never silently
-// narrowed.
-func expandTerritories(configured []string, lotl *tsl.TrustedList) []string {
+// verified LOTL's pointer set: the EU group expands to the LOTL's pointer
+// territories, explicit codes pass through, duplicates collapse. A code the
+// LOTL has no pointer for stays in the set and fails its ingest visibly (a
+// failed entry) rather than being dropped here — configured intent is never
+// silently narrowed.
+func expandTerritories(configured []string, ps *pointerSet) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(code string) {
@@ -194,7 +194,7 @@ func expandTerritories(configured []string, lotl *tsl.TrustedList) []string {
 	}
 	for _, code := range configured {
 		if code == TerritoryGroupEU {
-			for _, t := range lotl.Territories() {
+			for _, t := range ps.territories() {
 				add(t)
 			}
 			continue
@@ -274,17 +274,62 @@ func (p *Pipeline) RefreshDeclared(prev *trust.Snapshot, now time.Time) (*trust.
 	return next, true, rep, nil
 }
 
-// ingestLOTL runs the LOTL through its source adapter: fetch, then the
-// verification complex (direct vs pivot walk, expiry, self-consistency — see
-// euLOTLSource.Verify). This function owns only the signer-set precedence:
-// continue from the previous snapshot's (pivot-rotated) signer set when one
-// exists, otherwise start from the operator-pinned bootstrap set.
-func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap, now time.Time) (*tsl.TrustedList, []*x509.Certificate, uint64, error) {
+// lotlResult is what one cycle learns about the list of the lists: its
+// scheme metadata, the signer set after any pivot rotation, the digest its
+// publisher advertises for it, and the territory pointer set the loop runs
+// on. It is filled from a freshly verified list, or — when the published
+// digest proved the held list unchanged — carried over from the previous
+// snapshot, which is why the snapshot carries those fields at all.
+type lotlResult struct {
+	sequence     uint64
+	issueTime    time.Time
+	nextUpdate   *time.Time
+	pivotSeq     uint64
+	advertisedOJ string
+	signersDER   [][]byte
+	digest       string
+	pointers     *pointerSet
+}
+
+// ingestLOTL runs the list of the lists through its source adapter: the
+// digest pre-check first (no download when the publisher's ".sha2" names the
+// list already held and that list is within its NextUpdate), else fetch and
+// the verification complex (direct vs pivot walk, expiry, self-consistency —
+// see euLOTLSource.Verify). This function owns only the signer-set
+// precedence: continue from the previous snapshot's (pivot-rotated) signer
+// set when one exists, otherwise start from the operator-pinned bootstrap
+// set.
+func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *trust.Bootstrap, now time.Time) (*lotlResult, error) {
 	src := &euLOTLSource{p: p, url: p.cfg.LOTLURL, now: now}
 
-	raw, err := src.Fetch(ctx, nil)
+	// The skip needs everything the loop would otherwise read off the fresh
+	// list: the digest to compare, the pointer set and the signer state to
+	// carry, and a held list that has not expired — an expired one must take
+	// the full path so its refusal fires.
+	var last *source.Raw
+	if prev != nil && prev.LOTLDigest != "" && len(prev.LOTLPointers) > 0 && len(prev.LOTLSignersDER) > 0 &&
+		prev.LOTLNextUpdate != nil && now.Before(*prev.LOTLNextUpdate) {
+		src.prevFresh = true
+		last = &source.Raw{Digest: prev.LOTLDigest, Sequence: prev.LOTLSequence}
+	}
+
+	raw, err := src.Fetch(ctx, last)
+	if errors.Is(err, source.ErrUnchanged) {
+		p.log.Info("list of the lists unchanged (.sha2 match) — download skipped, territory loop runs off the carried pointer set",
+			logUint("lotl_sequence", prev.LOTLSequence), logInt("pointers", len(prev.LOTLPointers)))
+		return &lotlResult{
+			sequence:     prev.LOTLSequence,
+			issueTime:    prev.LOTLIssueTime,
+			nextUpdate:   prev.LOTLNextUpdate,
+			pivotSeq:     prev.LOTLPivotSeq,
+			advertisedOJ: prev.AdvertisedOJ,
+			signersDER:   append([][]byte(nil), prev.LOTLSignersDER...),
+			digest:       prev.LOTLDigest,
+			pointers:     carriedPointerSet(prev.LOTLPointers),
+		}, nil
+	}
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
 
 	var pinned [][]byte
@@ -295,15 +340,25 @@ func (p *Pipeline) ingestLOTL(ctx context.Context, prev *trust.Snapshot, boot *t
 	default:
 		certs, cerr := boot.Certificates()
 		if cerr != nil {
-			return nil, nil, 0, cerr
+			return nil, cerr
 		}
 		pinned = certsDER(certs)
 	}
 
 	if _, err := src.Verify(ctx, raw, pinned); err != nil {
-		return nil, nil, 0, err
+		return nil, err
 	}
-	return src.list, src.signers, src.pivotSeq, nil
+	lotl := src.list
+	return &lotlResult{
+		sequence:     lotl.SchemeInformation.TSLSequenceNumber,
+		issueTime:    lotl.SchemeInformation.ListIssueDateTime,
+		nextUpdate:   lotl.SchemeInformation.NextUpdate.DateTime,
+		pivotSeq:     src.pivotSeq,
+		advertisedOJ: advertisedOJReference(lotl.SchemeInformation.SchemeInformationURI.URI),
+		signersDER:   certsDER(src.signers),
+		digest:       raw.Digest,
+		pointers:     lotlPointerSet(lotl),
+	}, nil
 }
 
 // lotlSignerSelfConsistent checks TS 119 615 PRO-4.1.4-10(a): the certificate
@@ -339,8 +394,8 @@ func certInSet(c *x509.Certificate, set []*x509.Certificate) bool {
 // it carries over the previous snapshot's territory data (fail-safe); when no
 // previous data exists it returns the error and the caller records the
 // territory as failed — the rest of the cycle continues.
-func (p *Pipeline) ingestTerritory(ctx context.Context, lotl *tsl.TrustedList, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
-	t, err := p.fetchTerritory(ctx, lotl, code, prev, now)
+func (p *Pipeline) ingestTerritory(ctx context.Context, ps *pointerSet, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
+	t, err := p.fetchTerritory(ctx, ps, code, prev, now)
 	if err == nil {
 		return t, nil
 	}
@@ -374,8 +429,8 @@ func (p *Pipeline) ingestTerritory(ctx context.Context, lotl *tsl.TrustedList, c
 	return &carried, nil
 }
 
-func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
-	ptr, err := lotl.PointerFor(code)
+func (p *Pipeline) fetchTerritory(ctx context.Context, ps *pointerSet, code string, prev *trust.Snapshot, now time.Time) (*trust.Territory, error) {
+	lp, err := ps.pointerFor(code)
 	if err != nil {
 		return nil, err
 	}
@@ -389,7 +444,7 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		fetcher:          p.fetcher,
 		log:              p.log,
 		code:             code,
-		ptr:              ptr,
+		url:              lp.URL,
 		allowHTTP:        p.cfg.allowsHTTP(code),
 		acceptedStatuses: p.cfg.AcceptedStatuses,
 		acceptedTypes:    p.cfg.AcceptedServiceTypes,
@@ -414,12 +469,7 @@ func (p *Pipeline) fetchTerritory(ctx context.Context, lotl *tsl.TrustedList, co
 		return nil, err
 	}
 
-	signers, err := ptr.Certificates()
-	if err != nil {
-		return nil, fmt.Errorf("pointer certs for %s: %w", code, err)
-	}
-
-	if _, err := src.Verify(ctx, raw, certsDER(signers)); err != nil {
+	if _, err := src.Verify(ctx, raw, lp.SignersDER); err != nil {
 		return nil, err
 	}
 	anchors, err := src.Extract(nil)

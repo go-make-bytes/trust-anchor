@@ -334,3 +334,43 @@ func TestBootInventoryNamesSkippedServices(t *testing.T) {
 		}
 	}
 }
+
+// TestManagerPersistsWhenLOTLInputsChange: the digest and pointer set the
+// next cycle's download skip rests on reach the store even when nothing
+// served — and so the id — moved (the upgrade case: a snapshot persisted
+// before the digest existed), without that being reported as a change.
+func TestManagerPersistsWhenLOTLInputsChange(t *testing.T) {
+	first := managerSnapshot(t) // no digest, no pointers — as an earlier release persisted it
+	fr := &fakeRefresher{snap: first}
+	m, st := managerForTest(t, fr)
+	seedBootstrap(t, st)
+	if err := m.Initialize(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if out := m.Refresh(context.Background()); out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+
+	learned := managerSnapshot(t) // the same content and id, plus the inputs the next skip needs
+	learned.LOTLDigest = "abc"
+	learned.LOTLPointers = []trust.ListPointer{{Territory: "LV", URL: "https://trustlist.gov.lv/tsl/latvian-tsl.xml", SignersDER: [][]byte{{1}}}}
+	if learned.ID != first.ID {
+		t.Fatalf("test premise: the ids must match (%s vs %s)", first.ID, learned.ID)
+	}
+	fr.snap = learned
+
+	out := m.Refresh(context.Background())
+	if out.CycleErr != nil {
+		t.Fatal(out.CycleErr)
+	}
+	if out.Changed {
+		t.Error("learning the skip inputs is not a change to what is served")
+	}
+	stored, err := st.LoadLatestSnapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.LOTLDigest != "abc" || len(stored.LOTLPointers) != 1 {
+		t.Fatalf("the skip inputs did not reach the store: %+v", stored)
+	}
+}

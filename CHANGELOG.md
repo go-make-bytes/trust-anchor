@@ -5,6 +5,21 @@ runs the service or integrates against it.
 
 ## v0.5.0
 
+### Changed — the list of the lists is downloaded only when it changed
+
+Every refresh cycle used to download the EU list of trusted lists in full to read the territory
+pointers from it, even though the national lists were already skipped by their published `.sha2`
+digest. The snapshot now carries the list's digest and its territory pointer set (each list's
+location and the certificates it must be signed with), so a cycle first fetches the list's sibling
+`.sha2` (64 bytes) and downloads the list itself only when the digest changed, none is published, or
+the held list has passed its `NextUpdate` — the rules the national lists already follow. A warm cycle
+against an unchanged publisher costs one small request instead of a download of about half a
+megabyte. The digest decides only whether to download; trust still comes from the XML signature of
+anything downloaded, and an expired list is still refused on the full path. Snapshot ids and `ETag`s
+are unaffected. A snapshot persisted by an earlier release carries no digest, so the first cycle
+after upgrading downloads once and learns it; the pointer set adds about 200 KB to a persisted
+snapshot (31 territories, measured).
+
 ### Changed — the image ships a writable data directory for the filesystem store
 
 `/var/lib/trust-anchor` now exists in the image, owned by the unprivileged user the service runs
