@@ -64,21 +64,20 @@ The container image is published at **`ghcr.io/go-make-bytes/trust-anchor`** —
 The smallest useful deployment — one node, a filesystem snapshot store, the network-trusted auth mode:
 
 ```sh
-mkdir -p trust-anchor-data
-docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
+docker run --rm -p 8080:8080 \
   -e SERVICE_NAME=trust-anchor \
   -e AUTH_MODE=internal -e TRUST_ADMIN_KEY=change-me \
-  -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v "$PWD/trust-anchor-data:/var/lib/trust-anchor" \
+  -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v trust-anchor-data:/var/lib/trust-anchor \
   -e TRUST_TERRITORIES=EU \
   ghcr.io/go-make-bytes/trust-anchor:latest
 # TRUST_TERRITORIES=EU is the default (every list the LOTL points to); narrow with codes, e.g. LV,EE
 
-curl -s localhost:8080/readyz                       # 503 until the first cycle completes (about a minute for the EU group), then 200
+curl -s localhost:8080/readyz                       # 503 until the first cycle completes (one to a few minutes for the EU group, on the publishers' hosts), then 200
 curl -s localhost:8080/v1/snapshot | head -c 400    # the served snapshot, per-territory outcomes
 curl -s "localhost:8080/v1/anchors?use=signature" -o eu-signature-cas.pem
 ```
 
-Two things the command carries on purpose. `SERVICE_NAME` is required by the base configuration — the process refuses to start without it. And the image runs as an unprivileged user (uid 1000), so the snapshot directory must be writable by whoever the container runs as: the `--user` flag above makes that the invoking user of a bind-mounted directory. With a named volume instead, initialise its ownership once (`docker run --rm -v trust-anchor-data:/data alpine chown 1000:1000 /data`) — a fresh volume is created root-owned, and the service then fails at start with `mkdir …/bootstrap: permission denied`.
+Two things the command carries on purpose. `SERVICE_NAME` is required by the base configuration — the process refuses to start without it. And `trust-anchor-data` is a named volume: the image ships `/var/lib/trust-anchor` owned by the unprivileged user it runs as (uid 1000), and a fresh named volume mounted there inherits that ownership, so the first start needs no `--user` flag and no ownership step. If you bind-mount a host directory instead, it must be writable by uid 1000 — or run the container with `--user` set to that directory's owner.
 
 For anything shared or multi-instance: an S3-compatible bucket or Postgres as the snapshot store, `AUTH_MODE=dpop` in front of an OAuth 2.0 issuer, and the security events wired to your log pipeline — all below.
 

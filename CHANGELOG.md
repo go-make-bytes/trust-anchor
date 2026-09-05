@@ -3,6 +3,19 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.5.0
+
+### Changed — the image ships a writable data directory for the filesystem store
+
+`/var/lib/trust-anchor` now exists in the image, owned by the unprivileged user the service runs
+as (uid 1000). A fresh named volume mounted there inherits that ownership, so the filesystem
+snapshot store (`TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor`) starts on its first run without a
+`--user` flag or a one-time `chown` — previously the volume was created root-owned and the service
+stopped at start with `mkdir …/bootstrap: permission denied`. Nothing changes for deployments on S3
+or Postgres, or when `TRUST_SNAPSHOT_DIR` is unset: the directory is inert, and the image declares
+no `VOLUME`, so no anonymous volume appears. A bind-mounted host directory still has to be writable
+by uid 1000.
+
 ## v0.4.0
 
 ### Changed — anchors whose key the parser cannot interpret are held, and served on request
