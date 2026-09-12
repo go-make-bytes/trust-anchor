@@ -261,6 +261,19 @@ func (b *Bootstrap) Fingerprints() []string {
 	return out
 }
 
+// ListPointer is one territory's trusted-list pointer as the verified list of
+// the lists publishes it: where the list is and which certificates may sign
+// it. SignersDER is carried unparsed so a certificate the parser refuses fails
+// its own territory at verification time, never the cycle; Failure records a
+// pointer whose certificates did not even decode, so that territory fails the
+// same way whether the pointer was read off the list or carried.
+type ListPointer struct {
+	Territory  string   `json:"territory"`
+	URL        string   `json:"url"`
+	SignersDER [][]byte `json:"signersDer,omitempty"`
+	Failure    string   `json:"failure,omitempty"`
+}
+
 // Snapshot is one versioned, content-addressed trust-anchor state. The active
 // snapshot is held in memory and persisted to the snapshot store.
 type Snapshot struct {
@@ -276,6 +289,18 @@ type Snapshot struct {
 	LOTLSignersDER [][]byte `json:"lotlSignersDer"`
 	// LOTLPivotSeq is the sequence number of the last processed pivot.
 	LOTLPivotSeq uint64 `json:"lotlPivotSeq"`
+	// LOTLDigest is the SHA-256 of the list of the lists as fetched — the
+	// value its published sibling ".sha2" carries. Input-side change detection
+	// for the next cycle only: like Territory.SourceDigest it is never a trust
+	// input and stays out of the snapshot id.
+	LOTLDigest string `json:"lotlDigest,omitempty"`
+	// LOTLPointers is the verified list of the lists' territory pointer set —
+	// per territory, where its trusted list is and which certificates it must
+	// be signed with — carried across cycles so that a list of the lists the
+	// publisher's digest proves unchanged need not be downloaded again for the
+	// territory loop to run. Content the verified list vouched for, consumed by
+	// the loop exactly as a freshly verified list is; not part of the id.
+	LOTLPointers []ListPointer `json:"lotlPointers,omitempty"`
 	// AdvertisedOJ is the OJ reference the LOTL scheme information advertises.
 	AdvertisedOJ string `json:"advertisedOj,omitempty"`
 	// BootstrapOJRef/BootstrapVersion reference the active bootstrap set used.

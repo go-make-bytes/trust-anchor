@@ -3,6 +3,77 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.5.0
+
+### Changed — the list of the lists is downloaded only when it changed
+
+Every refresh cycle used to download the EU list of trusted lists in full to read the territory
+pointers from it, even though the national lists were already skipped by their published `.sha2`
+digest. The snapshot now carries the list's digest and its territory pointer set (each list's
+location and the certificates it must be signed with), so a cycle first fetches the list's sibling
+`.sha2` (64 bytes) and downloads the list itself only when the digest changed, none is published, or
+the held list has passed its `NextUpdate` — the rules the national lists already follow. A warm cycle
+against an unchanged publisher costs one small request instead of a download of about half a
+megabyte. The digest decides only whether to download; trust still comes from the XML signature of
+anything downloaded, and an expired list is still refused on the full path. Snapshot ids and `ETag`s
+are unaffected. A snapshot persisted by an earlier release carries no digest, so the first cycle
+after upgrading downloads once and learns it; the pointer set adds about 200 KB to a persisted
+snapshot (31 territories, measured).
+
+### Changed — the image ships a writable data directory for the filesystem store
+
+`/var/lib/trust-anchor` now exists in the image, owned by the unprivileged user the service runs
+as (uid 1000). A fresh named volume mounted there inherits that ownership, so the filesystem
+snapshot store (`TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor`) starts on its first run without a
+`--user` flag or a one-time `chown` — previously the volume was created root-owned and the service
+stopped at start with `mkdir …/bootstrap: permission denied`. Nothing changes for deployments on S3
+or Postgres, or when `TRUST_SNAPSHOT_DIR` is unset: the directory is inert, and the image declares
+no `VOLUME`, so no anonymous volume appears. A bind-mounted host directory still has to be writable
+by uid 1000.
+
+### Changed — the metrics endpoint no longer offers OpenMetrics
+
+A scraper that asked for the OpenMetrics format by sending `Accept: application/openmetrics-text`
+used to be answered in it, with the `# EOF` terminator that format requires. This service now
+answers in the Prometheus text format whatever the scraper asks for, and writes no `# EOF`:
+
+```http
+GET /metrics
+Accept: application/openmetrics-text
+
+200 OK
+Content-Type: text/plain; version=0.0.4; charset=utf-8
+```
+
+**The metric names, labels and values are unchanged**, so Prometheus — and anything else that
+accepts the plain-text exposition format — needs nothing done. Two setups need a look: a scrape
+configuration that *requires* the OpenMetrics content type, and a check that reads a missing
+`# EOF` as a truncated scrape. Both need their expectation relaxed.
+
+The endpoint itself is unchanged otherwise: still `/metrics` (or `METRICS_PATH`), still enabled by
+default, and still answered only for trusted addresses (`METRICS_TRUSTED_IPS`, `127.0.0.1` by
+default) — so if nothing scrapes this service, there is nothing to do. The change arrives from the
+web framework this service is built on rather than from a change of its own, carried in with the
+shared libraries below.
+
+### Notes
+
+- The shared libraries moved to their current releases — the auth client at v0.21.0 and the
+  platform kit at v1.11.2 — which carried the web framework, the HTTP stack and the JOSE library up
+  with them. No endpoint, field, error or setting of this service changed, and no configuration
+  needs touching. The move also clears two published advisories in the cryptography library this
+  service depends on; a third has no fix available yet and was already present before the move, and
+  the vulnerability scanner reports nothing this service's own code can reach.
+
+### Changed — the shared libraries move to their current releases
+
+`go-platform-kit` v1.11.3, `go-authbyte` v0.23.1 and `go-sec-events` v1.2.1. No endpoint, field,
+error or setting changes with them, nothing in your configuration needs touching, and this service's
+own behaviour is unchanged — trust-list fetching, parsing and the snapshot it serves are exactly as
+before. `go-authbyte` crosses v0.23.0 on the way, which adds a way to tell a natural person's
+identity code from an organisation's. The Postgres driver `pgx/v5` moves to v5.11.0 in the same
+pass.
+
 ## v0.4.0
 
 ### Changed — anchors whose key the parser cannot interpret are held, and served on request
