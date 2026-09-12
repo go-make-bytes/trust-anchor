@@ -71,7 +71,14 @@ func (tl *TrustedList) PointerFor(territory string) (*TSLPointer, error) {
 			return p, nil
 		}
 	}
-	return nil, fmt.Errorf("tsl: no XML trusted-list pointer for territory %q", territory)
+	return nil, ErrNoXMLPointer(territory)
+}
+
+// ErrNoXMLPointer is the error PointerFor returns for a territory the list
+// publishes no XML trusted-list pointer for — exported so a caller holding a
+// projection of the pointer set reports the same absence in the same words.
+func ErrNoXMLPointer(territory string) error {
+	return fmt.Errorf("tsl: no XML trusted-list pointer for territory %q", territory)
 }
 
 // Territories returns the territory codes this list publishes XML

@@ -29,6 +29,12 @@ type euLOTLSource struct {
 	// and advanced by Verify (directly, or by the pivot walk).
 	pivotSeq uint64
 
+	// prevFresh is true when the previous snapshot carries the list's digest
+	// and its territory pointer set and the held list is still within its
+	// NextUpdate — the only state in which the sibling ".sha2" may authorize
+	// skipping the download.
+	prevFresh bool
+
 	// Cached by Verify.
 	list    *tsl.TrustedList
 	signers []*x509.Certificate
@@ -40,13 +46,25 @@ func (s *euLOTLSource) Type() source.Type { return source.TypeEULOTL }
 // ID is the stable source identity.
 func (s *euLOTLSource) ID() string { return string(source.TypeEULOTL) }
 
-// Fetch retrieves the list of trusted lists. No digest-based skip yet: the
-// territory loop reads its pointers from the freshly parsed list each cycle,
-// so skipping the download first requires carrying the pointer set across
-// cycles — a separate change.
-func (s *euLOTLSource) Fetch(ctx context.Context, _ *source.Raw) (*source.Raw, error) {
+// Fetch retrieves the list of trusted lists, consulting its sibling ".sha2"
+// first: when the published digest matches the previous cycle's and the held
+// list is within NextUpdate, it returns source.ErrUnchanged and the caller
+// runs the territory loop off the pointer set the previous snapshot carries.
+// The digest only ever decides whether to download — it is never a trust
+// input, per [ETSI TS 119 612 V2.4.1 §6.1] ("shall not be used to
+// authenticate the TL"). A list past NextUpdate, with no stored digest, or
+// whose digest fetch fails always falls through to a full fetch, so a lying
+// or stale ".sha2" can delay a refresh only until the held list's own
+// validity runs out — and on that full path an expired list is refused
+// (LOTL_NEXTUPDATE_PASSED), never quietly kept.
+func (s *euLOTLSource) Fetch(ctx context.Context, last *source.Raw) (*source.Raw, error) {
 	if err := s.p.fetcher.AllowURL(s.url); err != nil {
 		return nil, err
+	}
+	if s.prevFresh && last != nil && last.Digest != "" {
+		if digest, derr := s.p.fetcher.FetchDigest(ctx, s.url); derr == nil && digest == last.Digest {
+			return nil, source.ErrUnchanged
+		}
 	}
 	raw, err := s.p.fetcher.Fetch(ctx, s.url)
 	if err != nil {

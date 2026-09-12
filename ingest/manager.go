@@ -251,7 +251,11 @@ func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 		!pendingEqual(prev.Pending, next.Pending) ||
 		territoryStateChanged(prev, next)
 
-	if cycleChanged {
+	// Persist on a served change — and also when only the inputs the next
+	// cycle's download skip rests on moved (lotlInputChanged): those must
+	// reach the store to survive a restart, without being reported as a
+	// change to what is served.
+	if cycleChanged || lotlInputChanged(prev, next) {
 		if err := m.store.SaveSnapshot(ctx, next); err != nil {
 			// Serving fresh verified data beats failing the cycle; the next
 			// cycle retries persistence.
@@ -402,6 +406,19 @@ func territoryStateChanged(prev, next *trust.Snapshot) bool {
 		}
 	}
 	return false
+}
+
+// lotlInputChanged reports whether the list-of-the-lists inputs the next
+// cycle's download skip rests on — the published digest, and with it the
+// carried pointer set — moved between two snapshots. They are not trust
+// content, so they are outside the id and outside "changed"; but without
+// persisting them a snapshot stored before the digest existed would force a
+// full download after every restart, forever. With this it happens once. A
+// digest change with an unchanged id is otherwise rare: the list's sequence
+// number, which is in the id, moves with every publication. prev is never
+// nil here: a first cycle persists on cycleChanged before this is consulted.
+func lotlInputChanged(prev, next *trust.Snapshot) bool {
+	return prev.LOTLDigest != next.LOTLDigest
 }
 
 // skippedEqual compares two skipped-service sets by identity (fingerprint,

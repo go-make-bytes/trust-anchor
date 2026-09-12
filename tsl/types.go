@@ -179,6 +179,22 @@ func (p TSLPointer) Certificates() ([]*x509.Certificate, error) {
 	return out, nil
 }
 
+// CertificateDERs decodes the pointer's X509Certificate digital identities to
+// DER without parsing them (see ServiceDigitalIdentity.CertificateDERs), for a
+// caller that carries the expected signer set across cycles and parses it
+// only where it is used.
+func (p TSLPointer) CertificateDERs() ([][]byte, error) {
+	var out [][]byte
+	for _, sdi := range p.ServiceDigitalIdentities {
+		ders, err := sdi.CertificateDERs()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ders...)
+	}
+	return out, nil
+}
+
 // Territory returns the SchemeTerritory advertised in AdditionalInformation.
 func (p TSLPointer) Territory() string {
 	for _, oi := range p.AdditionalInformation {

@@ -64,21 +64,20 @@ The container image is published at **`ghcr.io/go-make-bytes/trust-anchor`** —
 The smallest useful deployment — one node, a filesystem snapshot store, the network-trusted auth mode:
 
 ```sh
-mkdir -p trust-anchor-data
-docker run --rm -p 8080:8080 --user "$(id -u):$(id -g)" \
+docker run --rm -p 8080:8080 \
   -e SERVICE_NAME=trust-anchor \
   -e AUTH_MODE=internal -e TRUST_ADMIN_KEY=change-me \
-  -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v "$PWD/trust-anchor-data:/var/lib/trust-anchor" \
+  -e TRUST_SNAPSHOT_DIR=/var/lib/trust-anchor -v trust-anchor-data:/var/lib/trust-anchor \
   -e TRUST_TERRITORIES=EU \
   ghcr.io/go-make-bytes/trust-anchor:latest
 # TRUST_TERRITORIES=EU is the default (every list the LOTL points to); narrow with codes, e.g. LV,EE
 
-curl -s localhost:8080/readyz                       # 503 until the first cycle completes (about a minute for the EU group), then 200
+curl -s localhost:8080/readyz                       # 503 until the first cycle completes (one to a few minutes for the EU group, on the publishers' hosts), then 200
 curl -s localhost:8080/v1/snapshot | head -c 400    # the served snapshot, per-territory outcomes
 curl -s "localhost:8080/v1/anchors?use=signature" -o eu-signature-cas.pem
 ```
 
-Two things the command carries on purpose. `SERVICE_NAME` is required by the base configuration — the process refuses to start without it. And the image runs as an unprivileged user (uid 1000), so the snapshot directory must be writable by whoever the container runs as: the `--user` flag above makes that the invoking user of a bind-mounted directory. With a named volume instead, initialise its ownership once (`docker run --rm -v trust-anchor-data:/data alpine chown 1000:1000 /data`) — a fresh volume is created root-owned, and the service then fails at start with `mkdir …/bootstrap: permission denied`.
+Two things the command carries on purpose. `SERVICE_NAME` is required by the base configuration — the process refuses to start without it. And `trust-anchor-data` is a named volume: the image ships `/var/lib/trust-anchor` owned by the unprivileged user it runs as (uid 1000), and a fresh named volume mounted there inherits that ownership, so the first start needs no `--user` flag and no ownership step. If you bind-mount a host directory instead, it must be writable by uid 1000 — or run the container with `--user` set to that directory's owner.
 
 For anything shared or multi-instance: an S3-compatible bucket or Postgres as the snapshot store, `AUTH_MODE=dpop` in front of an OAuth 2.0 issuer, and the security events wired to your log pipeline — all below.
 
@@ -129,7 +128,7 @@ flowchart TB
 
     subgraph Ingest["ingest/ — one cycle, stateless between cycles"]
         FET["fetcher — https allow-list, size cap, timeout"]
-        SRC["source adapters — EU LOTL (+ pivot walk) ·<br/>national TL (+ .sha2 skip): fetch → verify → extract"]
+        SRC["source adapters — EU LOTL (+ .sha2 skip, pivot walk) ·<br/>national TL (+ .sha2 skip): fetch → verify → extract"]
         PIP["pipeline — orchestration: LOTL → national TLs →<br/>declared anchors → snapshot → hold governance"]
         MGR["manager — active snapshot (atomic), fail-safe swap"]
     end
@@ -184,16 +183,21 @@ sequenceDiagram
 
     T->>M: Refresh(ctx)  (timer / NextUpdate / admin kick)
     M->>P: Refresh(prev snapshot, active bootstrap)
-    P->>F: fetch LOTL (https, allow-list, size cap)
-    F-->>P: raw LOTL bytes
-    P->>P: pre-parse (unverified) → pivot URLs only
-    P->>V: verify LOTL vs pinned signer set
-    alt direct verify fails
-        P->>F: fetch unprocessed pivots
-        P->>V: verify each pivot at its issue time → rotate signer set
-        P->>V: re-verify LOTL vs rotated signers
+    P->>F: fetch the LOTL's sibling .sha2 (only while the held LOTL is within its NextUpdate)
+    alt .sha2 matches the held LOTL
+        P->>P: no download — signer set + territory pointers carried from the previous snapshot
+    else digest changed · none published · held LOTL expired
+        P->>F: fetch LOTL (https, allow-list, size cap)
+        F-->>P: raw LOTL bytes
+        P->>P: pre-parse (unverified) → pivot URLs only
+        P->>V: verify LOTL vs pinned signer set
+        alt direct verify fails
+            P->>F: fetch unprocessed pivots
+            P->>V: verify each pivot at its issue time → rotate signer set
+            P->>V: re-verify LOTL vs rotated signers
+        end
+        V-->>P: signature-verified LOTL (canonical bytes) → territory pointers
     end
-    V-->>P: signature-verified LOTL (canonical bytes)
     loop each configured territory
         P->>F: fetch national TL (+ optional .sha2 skip check)
         P->>V: verify TL vs signer certs from the verified LOTL pointer
@@ -352,6 +356,8 @@ Server, logging, metrics and tracing settings are the framework's base configura
 | `AUTH_ISSUER_URL` / `SERVICE_AUDIENCE` / `AUTH_JWKS_*` / `DPOP_*` | see [Auth modes](#auth-modes) | Inbound token validation; consulted only when `AUTH_MODE=dpop` |
 | `TRUST_ADMIN_KEY` | — | `AUTH_MODE=internal` only: the `X-API-Key` value that grants `trust:admin`. **Secret** — required (boot fails closed if empty), never logged. Supports the `TRUST_ADMIN_KEY_FILE` convention |
 
+Every cycle asks each publisher for the list's sibling `.sha2` digest first — the list of the lists included — and downloads a list only when the digest changed, none is published, or the held list has passed its `NextUpdate`; the digest decides only whether to download, never what to trust (trust comes from the XML signature of whatever is downloaded, and an expired list of the lists is refused on that path). A warm cycle against unchanged publishers is therefore a handful of 64-byte requests.
+
 Upstream egress is confined to exactly the LOTL host and the TL hosts discovered from the *verified* LOTL — https only, TLS verified, size-capped. Any non-https pointer raises `egress.violation` and that territory falls back to its last good data (or a failed entry when it has none). One narrow, explicit exception: a territory named in `TRUST_ALLOW_HTTP_TERRITORIES` may be fetched over its published plain-http pointer (Slovakia's LOTL pointer is http, and its https alternative serves a wrong-hostname certificate). List **integrity never rests on transport** — every fetched list is XMLDSig-verified against the LOTL-pinned signers before anything trusts it — so the opt-in waives only the defense-in-depth transport rule, per named territory, logged loudly on every cycle. It can never apply to the LOTL itself.
 
 ---
@@ -474,7 +480,7 @@ trust-anchor/
 │   └── response/                — API response DTOs
 ├── ingest/                      — one ingestion cycle
 │   ├── fetcher.go               — https allow-list, size cap, timeout, .sha2 digest fetch
-│   ├── source_lotl.go           — EU LOTL adapter (fetch → verify → pivot walk → extract pointers)
+│   ├── source_lotl.go           — EU LOTL adapter (.sha2 skip → fetch → verify → pivot walk → extract pointers)
 │   ├── source_national.go       — national TL adapter (.sha2 skip → fetch → verify → extract)
 │   ├── pipeline.go              — orchestration: LOTL → national TLs → declared → snapshot → hold
 │   ├── pivot.go                 — LOTL pivot-chain signer rotation

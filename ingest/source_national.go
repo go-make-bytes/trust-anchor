@@ -23,7 +23,7 @@ type nationalTLSource struct {
 	fetcher   *Fetcher
 	log       *zap.Logger
 	code      string
-	ptr       *tsl.TSLPointer
+	url       string // the list location the verified list of the lists points at
 	allowHTTP bool
 
 	// Change-detection input from the previous cycle. prevFresh is true when
@@ -63,25 +63,25 @@ func (s *nationalTLSource) ID() string { return s.code }
 // a refresh only until the held list's own validity runs out.
 func (s *nationalTLSource) Fetch(ctx context.Context, last *source.Raw) (*source.Raw, error) {
 	if s.allowHTTP {
-		if err := s.fetcher.AllowHTTPFor(s.ptr.TSLLocation); err != nil {
+		if err := s.fetcher.AllowHTTPFor(s.url); err != nil {
 			return nil, err
 		}
 		s.log.Warn("territory trusted list will be fetched over plain http by explicit operator opt-in — integrity comes from the XMLDSig verification, not transport",
-			zap.String("territory", s.code), zap.String("url", s.ptr.TSLLocation))
+			zap.String("territory", s.code), zap.String("url", s.url))
 	}
-	if err := s.fetcher.AllowURL(s.ptr.TSLLocation); err != nil {
+	if err := s.fetcher.AllowURL(s.url); err != nil {
 		return nil, err
 	}
 
 	if s.prevFresh && last != nil && last.Digest != "" {
-		if digest, derr := s.fetcher.FetchDigest(ctx, s.ptr.TSLLocation); derr == nil && digest == last.Digest {
+		if digest, derr := s.fetcher.FetchDigest(ctx, s.url); derr == nil && digest == last.Digest {
 			s.log.Debug("territory unchanged (.sha2 match) — skipped full fetch",
 				zap.String("territory", s.code), zap.String("digest", digest))
 			return nil, source.ErrUnchanged
 		}
 	}
 
-	raw, err := s.fetcher.Fetch(ctx, s.ptr.TSLLocation)
+	raw, err := s.fetcher.Fetch(ctx, s.url)
 	if err != nil {
 		return nil, err
 	}
