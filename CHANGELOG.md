@@ -65,6 +65,15 @@ shared libraries below.
   service depends on; a third has no fix available yet and was already present before the move, and
   the vulnerability scanner reports nothing this service's own code can reach.
 
+### Changed — the shared libraries move to their current releases
+
+`go-platform-kit` v1.11.3, `go-authbyte` v0.23.1 and `go-sec-events` v1.2.1. No endpoint, field,
+error or setting changes with them, nothing in your configuration needs touching, and this service's
+own behaviour is unchanged — trust-list fetching, parsing and the snapshot it serves are exactly as
+before. `go-authbyte` crosses v0.23.0 on the way, which adds a way to tell a natural person's
+identity code from an organisation's. The Postgres driver `pgx/v5` moves to v5.11.0 in the same
+pass.
+
 ## v0.4.0
 
 ### Changed — anchors whose key the parser cannot interpret are held, and served on request

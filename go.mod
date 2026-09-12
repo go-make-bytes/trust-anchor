@@ -40,7 +40,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/crc64nvme v1.1.1 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/molecule-man/go-brrr v1.0.1 // indirect
+	github.com/molecule-man/go-brrr v1.1.0 // indirect
 	github.com/oklog/ulid/v2 v2.1.2 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
@@ -84,8 +84,8 @@ require (
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
-	google.golang.org/genproto/googleapis/api v0.0.0-20260908043556-f8649ddbbfe6 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260908043556-f8649ddbbfe6 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20260911204522-f61a6ca850bd // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd // indirect
 	google.golang.org/grpc v1.83.2 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 	gopkg.in/ini.v1 v1.67.3 // indirect
@@ -96,11 +96,11 @@ require (
 	azugo.io/core v0.38.1
 	github.com/VictoriaMetrics/metrics v1.44.0
 	github.com/beevik/etree v1.8.0
-	github.com/gmb-lib/go-authbyte v0.22.0
-	github.com/gmb-lib/go-platform-kit v1.11.2
-	github.com/gmb-lib/go-sec-events v1.2.0
+	github.com/gmb-lib/go-authbyte v0.23.1
+	github.com/gmb-lib/go-platform-kit v1.11.3
+	github.com/gmb-lib/go-sec-events v1.2.1
 	github.com/go-quicktest/qt v1.102.0
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/lafriks/go-xmldsig/v2 v2.4.0
 	github.com/minio/minio-go/v7 v7.3.0
 	github.com/spf13/cobra v1.10.2
