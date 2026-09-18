@@ -3,6 +3,29 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.6.0
+
+### Added — the database schema ships in this repository
+
+Running the Postgres backend meant fetching the schema from the `signbyte-database` repository, which
+this README used to point at. It is here now, under `migrations/`, MIT like the rest of this
+repository, and the README points at it.
+
+**No deployment has to do anything.** The SQL is the same SQL, a database created from the old copy is
+already correct, and the published image is unchanged — it carries the binary and its configuration and
+has never carried migrations.
+
+What is there is what this service needs and nothing more: the `trust_anchor` location (the two
+versioned tables, the four `SECURITY DEFINER` procedures, the privilege grants), the `util` primitives
+those procedures call (`generate_ulid`, `result_success`, `result_error`), the database-wide hardening
+applied last, the Flyway runner, and the one-shot that creates the `trust_anchor_public` login role the
+service connects as. `migrations/README.md` gives the order — roles first, then migrate — and both
+scripts take everything from the environment, so the same files apply under any database or owner name.
+
+The directory is generated from the repository that authors the schema and is regenerated and diffed
+against it, so a hand edit here is reported as drift rather than quietly kept. Fix the schema at its
+source.
+
 ## v0.5.0
 
 ### Changed — the list of the lists is downloaded only when it changed
