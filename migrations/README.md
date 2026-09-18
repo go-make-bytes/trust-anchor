@@ -19,7 +19,7 @@ is reported as drift rather than quietly kept. Fix the schema at its source.
 | path | what |
 |---|---|
 | `trust_anchor/` | the schema this service uses — `V1__` creates the tables and the role grants, `R__` holds the four procedures and is re-applied whenever it changes |
-| `util/` | shared helpers the procedures call: an identifier generator and the success/error envelope they return. `V2`/`V3` add identity helpers that this service never calls; they travel because a location is applied as a whole directory |
+| `util/` | the shared helpers the procedures call, and only those: the identifier generator and the success/error envelope they return |
 | `grants/` | database-wide hardening and per-schema human read roles, applied last. Removing `TEMPORARY` from `PUBLIC` and pinning the database's default `search_path` are what stop a caller influencing name resolution inside a privileged procedure body |
 | `migrate.sh` | applies the locations in order with [Flyway](https://flyway.org), one history table per schema, and fails before touching the database if a requested location is missing |
 | `provision-roles.sh` | creates the login role the service connects as. Run it **before** migrating: the migrations assign privileges and carry no credentials |
