@@ -5,6 +5,11 @@ runs the service or integrates against it.
 
 ## v0.6.0
 
+### Added — one more shared helper in the shipped migrations
+
+`migrations/util/V3__config_token.sql` adds a pure function, `util.config_token`, that this service does not call.
+Applying the migrations records one more versioned migration in `flyway_schema_history_util`; nothing else changes.
+
 ### Added — the database schema ships in this repository
 
 Running the Postgres backend meant fetching the schema from the `signbyte-database` repository, which
