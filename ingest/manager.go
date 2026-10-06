@@ -182,7 +182,7 @@ func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (
 	m.activate(next)
 	if !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
-			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
+			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.Type, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
 		}
 	}
 	m.log.Info("operator-declared sources reconciled into a new snapshot",
@@ -278,7 +278,7 @@ func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 
 	if cycleChanged && !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
-			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
+			m.events.AnchorChange(nil, e.Kind, e.Territory, e.Fingerprint, e.Type, e.TSPName, e.ServiceName, e.Status, e.Detail, false)
 		}
 	}
 
@@ -352,7 +352,7 @@ func (m *Manager) ApprovePending(ctx *azugo.Context, fingerprint, actor string) 
 
 	m.events.PendingApproved(ctx, fingerprint, actor, "api")
 	a := approved.Anchor
-	m.events.AnchorChange(ctx, trust.DiffAdded, a.Territory, a.FingerprintSHA256, a.TSPName, a.ServiceName, a.Status, "approved from pending", false)
+	m.events.AnchorChange(ctx, trust.DiffAdded, a.Territory, a.FingerprintSHA256, a.Type, a.TSPName, a.ServiceName, a.Status, "approved from pending", false)
 	return next, nil
 }
 

@@ -19,7 +19,14 @@
 #   pid_provider   qeaa_provider   pub_eaa_provider   eaa_provider
 #   wallet_provider   access_ca   wrprc_issuer
 #   pid_provider_status   qeaa_provider_status   pub_eaa_provider_status   eaa_provider_status
-# An unrecognized type rejects the WHOLE file — there is no partial load.
+# An unrecognized type rejects the WHOLE file — there is no partial load. So
+# does a key this format does not know (a misspelled `type`, say).
+#
+# A certificate that holds several roles — one CA signing both PIDs and
+# attestations — is declared ONCE, with `types` instead of `type`:
+#   types: [pid_provider, eaa_provider]
+# It is then served under each listed type. Set `type` or `types`, never both,
+# and never declare the same certificate in a second entry.
 
 anchors:
   # --- PID issuer: the CA that signs your wallet's PID-issuance certificates.

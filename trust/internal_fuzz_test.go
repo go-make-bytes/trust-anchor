@@ -23,6 +23,13 @@ func FuzzLoadInternal(f *testing.F) {
 	f.Add([]byte("anchors: [1, 2, 3]"))                             // wrong shape
 	f.Add([]byte("anchors:\n  - &a\n    name: *a\n    type: *a\n")) // self-referential alias
 
+	// One entry under several types; a types key with no value; an unknown
+	// key; an entry written through an alias.
+	f.Add([]byte("anchors:\n  - name: x\n    types: [pid_provider, eaa_provider]\n    territory: LV\n    certificateFile: internal-ca-two.pem\n"))
+	f.Add([]byte("anchors:\n  - name: x\n    types:\n    territory: LV\n"))
+	f.Add([]byte("anchors:\n  - name: x\n    tpye: pid_provider\n"))
+	f.Add([]byte("base: &b {name: x, type: pid_provider}\nanchors: [*b]\n"))
+
 	baseDir := internalFixture("")
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	f.Fuzz(func(t *testing.T, data []byte) {

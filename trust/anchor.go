@@ -429,7 +429,16 @@ func (s *Snapshot) ComputeID() string {
 	for _, a := range s.Internal {
 		content.Internal = append(content.Internal, idAnchor{Fingerprint: a.FingerprintSHA256, Status: a.Status, QSCD: a.QCWithQSCD, Uses: a.Uses, Source: a.Source, Type: a.Type, UseCases: a.UseCases})
 	}
-	sort.Slice(content.Internal, func(i, j int) bool { return content.Internal[i].Fingerprint < content.Internal[j].Fingerprint })
+	// A certificate declared under several types appears once per type: the
+	// type breaks the tie, so the ID never depends on input order. With no
+	// shared fingerprint the order — and so the ID — is what it always was.
+	sort.Slice(content.Internal, func(i, j int) bool {
+		a, b := content.Internal[i], content.Internal[j]
+		if a.Fingerprint != b.Fingerprint {
+			return a.Fingerprint < b.Fingerprint
+		}
+		return a.Type < b.Type
+	})
 	for _, p := range s.Pending {
 		content.Pending = append(content.Pending, p.Anchor.FingerprintSHA256)
 	}
