@@ -218,3 +218,58 @@ func TestLoadInternalEmptySource(t *testing.T) {
 		})
 	}
 }
+
+// loadInline parses an inline declaration whose certificateFile entries
+// resolve against testdata/.
+func loadInline(t *testing.T, raw string) ([]Anchor, error) {
+	t.Helper()
+	return loadInternalBytes([]byte(raw), internalFixture(""), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// TestLoadInternalUnknownEntryKey: a key the schema does not know rejects the
+// whole file. A misspelled `type` used to be ignored, which left the entry
+// with no type and moved the CA into the untyped bundle — a different trust
+// plane from the one the operator meant. The error names the entry and the
+// line, never the key itself (it is file content).
+func TestLoadInternalUnknownEntryKey(t *testing.T) {
+	const sentinel = "SENTINELKEY"
+	for _, key := range []string{"tpye", sentinel} {
+		t.Run(key, func(t *testing.T) {
+			anchors, err := loadInline(t, "anchors:\n"+
+				"  - name: Typo Anchor\n"+
+				"    "+key+": pid_provider\n"+
+				"    territory: LV\n"+
+				"    certificateFile: internal-ca-two.pem\n")
+			if err == nil {
+				t.Fatalf("got nil error and %d anchors, want the file rejected", len(anchors))
+			}
+			if len(anchors) != 0 {
+				t.Errorf("got %d anchors on failure, want 0", len(anchors))
+			}
+			for _, want := range []string{"Typo Anchor", "unknown key", "line 3"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err.Error(), want)
+				}
+			}
+			if strings.Contains(err.Error(), sentinel) {
+				t.Errorf("error %q echoes the key from the file", err.Error())
+			}
+		})
+	}
+}
+
+// TestLoadInternalUnknownTopLevelKey: a misspelled `anchors` used to load as
+// an empty declaration — every declared CA silently gone.
+func TestLoadInternalUnknownTopLevelKey(t *testing.T) {
+	anchors, err := loadInline(t, "anchor:\n"+
+		"  - name: Lost Anchor\n"+
+		"    type: pid_provider\n"+
+		"    territory: LV\n"+
+		"    certificateFile: internal-ca-two.pem\n")
+	if err == nil {
+		t.Fatalf("got nil error and %d anchors, want the file rejected", len(anchors))
+	}
+	if !strings.Contains(err.Error(), "unknown key") || !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("error %q does not say unknown key at line 1", err.Error())
+	}
+}

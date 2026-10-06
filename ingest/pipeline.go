@@ -559,7 +559,7 @@ func (p *Pipeline) applyHoldMode(prev, next *trust.Snapshot, now time.Time) {
 				continue
 			}
 			next.Pending = append(next.Pending, trust.PendingAnchor{Anchor: a, FirstSeen: now})
-			p.events.AnchorChange(nil, trust.DiffAdded, t.Code, a.FingerprintSHA256, a.TSPName, a.ServiceName, a.Status, "held for approval", true)
+			p.events.AnchorChange(nil, trust.DiffAdded, t.Code, a.FingerprintSHA256, a.Type, a.TSPName, a.ServiceName, a.Status, "held for approval", true)
 		}
 		t.Anchors = kept
 	}

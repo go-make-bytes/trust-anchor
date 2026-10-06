@@ -89,7 +89,11 @@ func (e *Emitter) Emit(ctx *azugo.Context, eventType string, sev secevents.Sever
 // quietly capped at warn so the SIEM stream was not a wall of red, which left
 // the two disagreeing: the line said warn while the severity field on it said
 // high. Warning is what was meant all along, and now both say it.
-func (e *Emitter) AnchorChange(ctx *azugo.Context, kind, territory, fingerprint, tspName, serviceName, status, detail string, pending bool) {
+//
+// anchorType names the anchor's EUDI type and is omitted for an untyped
+// anchor: one declared certificate can carry several types, and without it
+// two events for the same fingerprint could not be told apart.
+func (e *Emitter) AnchorChange(ctx *azugo.Context, kind, territory, fingerprint, anchorType, tspName, serviceName, status, detail string, pending bool) {
 	sev := secevents.SeverityInfo
 	if kind == "added" || kind == "removed" {
 		sev = secevents.SeverityWarning
@@ -101,6 +105,9 @@ func (e *Emitter) AnchorChange(ctx *azugo.Context, kind, territory, fingerprint,
 		"tsp_name":     tspName,
 		"service_name": serviceName,
 		"status":       status,
+	}
+	if anchorType != "" {
+		attrs["anchor_type"] = anchorType
 	}
 	if detail != "" {
 		attrs["detail"] = detail

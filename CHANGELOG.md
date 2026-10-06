@@ -5,6 +5,59 @@ runs the service or integrates against it.
 
 ## v0.6.0
 
+### Added — one declared certificate can hold several roles
+
+A CA that signs more than one kind of credential, for example both PIDs and employee attestations, can now be
+declared once with a list of types instead of a single type:
+
+```yaml
+anchors:
+  - name: Example Issuing CA
+    types: [pid_provider, eaa_provider]
+    territory: LV
+    certificateFile: issuing-ca.pem
+```
+
+It is served under each listed type, so both `GET /v1/anchors.json?type=pid_provider` and
+`?type=eaa_provider` return it. Before this, the only way to get the second role was to declare the certificate
+twice, and that rejected the whole file.
+
+- An entry sets `type` or `types`, never both. A `types` list that is empty, repeats a type, names an unknown type
+  or includes `tsl_ca` rejects the file.
+- A certificate still appears in one entry only. A second entry for the same certificate is rejected, even under a
+  different type. To add a role, add it to the existing entry's list.
+- Each role is its own anchor. Adding a role to an existing entry produces one `added` change, and removing it
+  produces one `removed`.
+- Files that declare one type per entry load exactly as before and keep their snapshot id, so consumers do not
+  refetch.
+
+**Roll out in this order:** deploy this version first, then change the file. An older version does not reject
+`types`. It ignores the key and serves the certificate as an untyped CA: it leaves its EUDI roles, and it appears
+in the untyped card and qualified-CA bundle. After the edit, check that each `type=` query returns the certificate.
+Checking that the snapshot id changed is not enough, because the id changes in the wrong case too.
+
+### Changed — the snapshot diff and the change event name the anchor type
+
+Each entry in the snapshot's `diff` now carries `type` when the anchor has one, and the `trust.anchor_change`
+event carries `anchor_type`. Untyped anchors are unchanged. Without it, the two roles of one certificate would be
+two indistinguishable entries for the same fingerprint.
+
+```json
+{"kind": "added", "territory": "internal", "fingerprint": "…", "type": "eaa_provider", "tspName": "Example Issuing CA", …}
+```
+
+### Fixed — an unknown key in the declaration file is now an error
+
+The declaration file used to ignore any key it did not know. A misspelled `type` therefore loaded without error and
+declared the certificate as an untyped CA: out of the role it was meant for, and into the bundle that ID card and
+qualified-certificate consumers trust. A misspelled `anchors` loaded as an empty declaration, which removed every
+declared certificate. An unknown key now rejects the whole file like any other invalid entry, and the previous set
+stays in service with `trust.internal_source_error`. The error names the entry and the line, not the key.
+
+**Before upgrading,** check your declaration file for keys other than `anchors` at the top and `name`, `type`,
+`types`, `territory`, `status`, `certificate`, `certificateFile`, `validUntil` and `useCases` in an entry. A file
+that carries any other key will be rejected after the upgrade, like any other invalid file.
+
 ### Added — one more shared helper in the shipped migrations
 
 `migrations/util/V3__config_token.sql` adds a pure function, `util.config_token`, that this service does not call.

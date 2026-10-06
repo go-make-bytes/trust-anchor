@@ -14,6 +14,9 @@ type DiffEntry struct {
 	Kind        string `json:"kind"`
 	Territory   string `json:"territory"` // "internal" for declared anchors
 	Fingerprint string `json:"fingerprint"`
+	// Type is the anchor's EUDI type, empty for an untyped anchor. A declared
+	// certificate can carry several types; each is its own entry.
+	Type        string `json:"type,omitempty"`
 	TSPName     string `json:"tspName"`
 	ServiceName string `json:"serviceName"`
 	Status      string `json:"status"`
@@ -67,7 +70,10 @@ func ComputeDiff(prev, next *Snapshot) *Diff {
 		if a.Kind != b.Kind {
 			return a.Kind < b.Kind
 		}
-		return a.Fingerprint < b.Fingerprint
+		if a.Fingerprint != b.Fingerprint {
+			return a.Fingerprint < b.Fingerprint
+		}
+		return a.Type < b.Type
 	})
 	return d
 }
@@ -87,8 +93,11 @@ func anchorIndex(s *Snapshot) map[string]indexedAnchor {
 			out[t.Code+"/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: t.Code}
 		}
 	}
+	// A declared certificate may carry several types, one anchor each: keyed
+	// by fingerprint alone they would collide, and adding or removing one
+	// type would vanish from the diff.
 	for _, a := range s.Internal {
-		out["internal/"+a.FingerprintSHA256] = indexedAnchor{anchor: a, territory: "internal"}
+		out["internal/"+a.FingerprintSHA256+"/"+a.Type] = indexedAnchor{anchor: a, territory: "internal"}
 	}
 	return out
 }
@@ -98,6 +107,7 @@ func entry(kind string, ia indexedAnchor, detail string) DiffEntry {
 		Kind:        kind,
 		Territory:   ia.territory,
 		Fingerprint: ia.anchor.FingerprintSHA256,
+		Type:        ia.anchor.Type,
 		TSPName:     ia.anchor.TSPName,
 		ServiceName: ia.anchor.ServiceName,
 		Status:      ia.anchor.Status,

@@ -49,7 +49,7 @@ func attr(e observer.LoggedEntry, key string) any {
 func TestAnchorAdditionIsAWarningOnBothChannels(t *testing.T) {
 	e, logs := observed()
 
-	e.AnchorChange(nil, "added", "LV", "fp-1", "tsp", "svc", "granted", "", false)
+	e.AnchorChange(nil, "added", "LV", "fp-1", "", "tsp", "svc", "granted", "", false)
 
 	entry := line(t, logs)
 	qt.Assert(t, qt.Equals(entry.Level, zapcore.WarnLevel))
@@ -60,11 +60,25 @@ func TestAnchorAdditionIsAWarningOnBothChannels(t *testing.T) {
 func TestAnchorRemovalIsAWarning(t *testing.T) {
 	e, logs := observed()
 
-	e.AnchorChange(nil, "removed", "LV", "fp-1", "tsp", "svc", "withdrawn", "", false)
+	e.AnchorChange(nil, "removed", "LV", "fp-1", "", "tsp", "svc", "withdrawn", "", false)
 
 	entry := line(t, logs)
 	qt.Assert(t, qt.Equals(entry.Level, zapcore.WarnLevel))
 	qt.Assert(t, qt.Equals(attr(entry, "severity"), any("warning")))
+}
+
+// One declared certificate can carry several types, so an addition says which
+// type it added — two additions for one fingerprint must be told apart. An
+// untyped anchor carries no type attribute at all.
+func TestAnchorChangeNamesTheType(t *testing.T) {
+	e, logs := observed()
+
+	e.AnchorChange(nil, "added", "internal", "fp-1", "eaa_provider", "tsp", "svc", "granted", "", false)
+	qt.Assert(t, qt.Equals(attr(line(t, logs), "anchor_type"), any("eaa_provider")))
+
+	e, logs = observed()
+	e.AnchorChange(nil, "added", "LV", "fp-1", "", "tsp", "svc", "granted", "", false)
+	qt.Assert(t, qt.IsNil(attr(line(t, logs), "anchor_type")))
 }
 
 // A metadata edit is not a change of who is trusted, so it stays informational —
@@ -72,7 +86,7 @@ func TestAnchorRemovalIsAWarning(t *testing.T) {
 func TestAnchorMetadataChangeStaysInfo(t *testing.T) {
 	e, logs := observed()
 
-	e.AnchorChange(nil, "changed", "LV", "fp-1", "tsp", "svc", "granted", "name", false)
+	e.AnchorChange(nil, "changed", "LV", "fp-1", "", "tsp", "svc", "granted", "name", false)
 
 	entry := line(t, logs)
 	qt.Assert(t, qt.Equals(entry.Level, zapcore.InfoLevel))
