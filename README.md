@@ -273,6 +273,11 @@ The store backend is derived from configuration:
 | **fs** | `TRUST_SNAPSHOT_DIR` set | Single-node deployments and local development |
 | **memory** | none of the above | Tests only — snapshots do not survive a restart |
 
+The **s3** backend's credential pair, `TRUST_SNAPSHOT_ACCESS_KEY` and `TRUST_SNAPSHOT_SECRET_KEY`, and the Postgres
+connection string `TRUST_STORE_DSN` can each be given as a file instead: set `<NAME>_FILE` to the path of a file holding the
+value (written by a secrets agent). The file is read when the plain setting is not set, and surrounding whitespace is
+trimmed.
+
 The **Postgres** backend never touches tables directly. It reaches a dedicated `trust_anchor` schema **only** through four `SECURITY DEFINER` procedures — `trust_anchor.save_snapshot`, `load_latest_snapshot`, `save_bootstrap`, `load_latest_bootstrap` — each with the uniform signature `(pi_data jsonb, INOUT po_data jsonb)`: the marshalled snapshot or bootstrap goes in as `pi_data` and is stored verbatim (key columns are projected from it), and a structured success-or-error envelope comes back. The service connects as an **`EXECUTE`-only role** (`trust_anchor_public`) that holds no table privileges, so a bug or injection cannot read or write rows outside the procedure contract. A procedure that fails after a write re-raises a structured error to force a rollback, which the store decodes back into the same typed error shape as the validation path. The service does **not** create the schema: the reference implementation ships in this repository under [`migrations/`](migrations/) — Flyway migrations for the two versioned tables, the four procedures, the role grants, and the small `util` schema they use for the result envelope — and can be applied as-is or ported to your own migration tooling; [`migrations/README.md`](migrations/README.md) gives the two commands, roles first. The DSN carries a password, so it is sourced from a mounted secret (see `TRUST_STORE_DSN_FILE` below), never an inline literal.
 
 trust-anchor keeps **no cache layer of its own** (no Redis/Valkey) — caching is the consumer's responsibility. Its contribution to that model is the stable `ETag` (= snapshot id) that lets every consumer poll cheaply and refresh only on real change.

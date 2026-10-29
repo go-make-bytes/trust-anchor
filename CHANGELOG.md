@@ -3,6 +3,22 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## Unreleased
+
+### Added
+
+- **`TRUST_SNAPSHOT_ACCESS_KEY_FILE` and `TRUST_SNAPSHOT_SECRET_KEY_FILE`.** The s3 snapshot store's credential pair
+  can now be read from files (for example ones a secrets agent writes), as `TRUST_STORE_DSN` already can. The plain
+  settings, when set, still win, so an existing deployment changes nothing.
+- **`TRUST_STORE_DSN_FILE` named but missing or empty now stops the start.** Before, the service treated it as "not
+  set" and fell back to a weaker snapshot store; it now refuses to start until the file has a value.
+
+### Changed
+
+- **Libraries updated, and the service now builds with Go 1.27.3:** azugo v0.40.2, go-authbyte v0.32.0,
+  go-platform-kit v1.11.5 and go-sec-events v1.2.3, with the other dependencies at their current releases. Nothing
+  about the API, the configuration or the database changes.
+
 ## v0.6.1
 
 A security release. **The service now builds with Go 1.27.2**, and its libraries move to their Go
