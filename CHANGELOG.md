@@ -3,6 +3,14 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.7.1
+
+### Changed
+
+- **The published schema gains `util/V5`**: the shared helper `util.labels_refusal` is declared STABLE (it was
+  IMMUTABLE), as the sentence it builds is. This service calls none of the shared helpers; applying the schema
+  changes the declaration only, and nothing it stores.
+
 ## v0.7.0
 
 ### Added
