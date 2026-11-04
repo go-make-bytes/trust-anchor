@@ -191,6 +191,8 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("internal_trust_source", "INTERNAL_TRUST_SOURCE")
 	_ = v.BindEnv("trust_snapshot_bucket", "TRUST_SNAPSHOT_BUCKET")
 	_ = v.BindEnv("trust_snapshot_endpoint", "TRUST_SNAPSHOT_ENDPOINT")
+	loadSecret(v, "trust_snapshot_access_key", "TRUST_SNAPSHOT_ACCESS_KEY")
+	loadSecret(v, "trust_snapshot_secret_key", "TRUST_SNAPSHOT_SECRET_KEY")
 	_ = v.BindEnv("trust_snapshot_access_key", "TRUST_SNAPSHOT_ACCESS_KEY")
 	_ = v.BindEnv("trust_snapshot_secret_key", "TRUST_SNAPSHOT_SECRET_KEY")
 	_ = v.BindEnv("trust_snapshot_prefix", "TRUST_SNAPSHOT_PREFIX")
@@ -215,6 +217,9 @@ func loadSecret(v *viper.Viper, key, name string) {
 
 // Validate validates the configuration.
 func (c *Configuration) Validate(valid *validation.Validate) error {
+	if err := refuseEmptyFileSecret("TRUST_STORE_DSN", c.StoreDSN); err != nil {
+		return err
+	}
 	if err := c.BaseConfiguration.Validate(valid); err != nil {
 		return err
 	}
