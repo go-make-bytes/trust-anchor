@@ -10,6 +10,9 @@ runs the service or integrates against it.
 - **`TRUST_SNAPSHOT_ACCESS_KEY_FILE` and `TRUST_SNAPSHOT_SECRET_KEY_FILE`.** The s3 snapshot store's credential pair
   can now be read from files (for example ones a secrets agent writes), as `TRUST_STORE_DSN` already can. The plain
   settings, when set, still win, so an existing deployment changes nothing.
+- **The published schema gains `util/V4`**: four shared helper functions (`util.app_languages`, `util.labels_merge`,
+  `util.labels_refusal`, `util.list_number`) that other services' configured lists use. This service calls none of
+  them; applying the schema adds them and changes nothing it stores.
 - **`TRUST_STORE_DSN_FILE` named but missing or empty now stops the start.** Before, the service treated it as "not
   set" and fell back to a weaker snapshot store; it now refuses to start until the file has a value.
 
