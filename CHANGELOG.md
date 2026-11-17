@@ -10,6 +10,10 @@ runs the service or integrates against it.
 - **The published schema gains `util/V5`**: the shared helper `util.labels_refusal` is declared STABLE (it was
   IMMUTABLE), as the sentence it builds is. This service calls none of the shared helpers; applying the schema
   changes the declaration only, and nothing it stores.
+- **Go 1.27.4 and azugo v0.50.2** (go-authbyte v0.46.0, go-platform-kit v1.13.0, go-sec-events v1.3.0), in `go.mod`
+  and as the image's default build toolchain (`ARG GO_VERSION` in the `Dockerfile`). **Rebuild the image to pick
+  them up.** Request bodies the framework reads are held to its limit (413 over 4 MiB); this service's routes take
+  no request body, so nothing changes for callers.
 
 ## v0.7.0
 
