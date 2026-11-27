@@ -151,7 +151,7 @@ flowchart TB
         PG[("postgres — SECURITY DEFINER procs")]
     end
 
-    TASK["tasks/refresh — timer · NextUpdate · admin kick"]
+    TASK["tasks/refresh — timer · NextUpdate · re-counted after an admin refresh"]
     EV["events — security events → log / SIEM"]
 
     Routes --> App
@@ -181,7 +181,7 @@ sequenceDiagram
     participant S as store
     participant C as consumer
 
-    T->>M: Refresh(ctx)  (timer / NextUpdate / admin kick)
+    T->>M: Refresh(ctx)  (timer / NextUpdate; the admin route calls it directly)
     M->>P: Refresh(prev snapshot, active bootstrap)
     P->>F: fetch the LOTL's sibling .sha2 (only while the held LOTL is within its NextUpdate)
     alt .sha2 matches the held LOTL
@@ -205,8 +205,9 @@ sequenceDiagram
     end
     P->>P: merge declared (internal) anchors · apply hold mode · ComputeID · diff
     P-->>M: next snapshot
-    M->>S: SaveSnapshot (only when content changed)
+    M->>S: SaveSnapshot (only when what a restart would restore moved)
     M->>M: atomic swap active = next
+    M->>S: SweepSnapshots (every completed cycle)
     M-->>T: security events (anchor_change / stale / refresh_failure)
 
     Note over C: independently, on its own poll interval
@@ -264,6 +265,10 @@ Trust posture: an internal anchor carries the **same posture as the pinned boots
 
 trust-anchor persists exactly two kinds of object, each versioned with a "latest" pointer: the **trust snapshot** (content-addressed by its `id`) and the **bootstrap** signer set. The active snapshot is held in memory behind an atomic pointer and re-read from the store on restart. There is intentionally no per-anchor relational schema — the dataset is tens of certificates plus metadata.
 
+**One stored version per content id.** The store keeps one version of the snapshot for each content id, whatever the number of cycles that produced it. A cycle saves when anything a restart would restore differently has moved: the id, the pending set, a territory's health, a territory's next-update, issue time or source digest, the list of the lists' digest, next-update or issue time — or when an earlier save failed (a failed save stays owed and the next cycle saves again, even if nothing moved, until one succeeds). A save whose id is the same as the latest stored version's **replaces that version in place**; any other id is a new version and becomes the latest. Only the latest is ever replaced, so a history of ids A, B, A is three versions. A cycle that moved nothing does not call the store at all. What a cycle reports (`changed` in the `/v1/refresh` answer and the log line) and the security events it raises do not depend on this: a health flip is still a change, and a date that moved on its own still is not.
+
+**The sweep.** At the end of every completed refresh cycle, saved or not, the service removes the stored versions that a newer version replaced more than `TRUST_SNAPSHOT_RETENTION` ago (default 90 days; the setting has a floor of one day and no off value). The latest version is never removed, and a version that served for a year is kept until 90 days after it was replaced. A failed sweep never fails the cycle or changes what is served: it is logged at error level and raised as a `trust.refresh_failure` event with the stage `sweep`; the next cycle sweeps again. Every store call a cycle makes to save or sweep is bounded to one minute, so a store that stops answering fails that step (the same event and log line, the save owed) instead of hanging the refresh loop. When a sweep removes versions it raises `trust.snapshots_swept` with the count and the cutoff. The **filesystem** and **S3** stores keep one object per version, named by the time the version was first seen and its full content id (`snapshots/<first-seen>-<id>.json`; keys written by earlier releases carry the first 16 characters of the id and are still read), and overwrite that object on a refresh of the same version; the sweep never removes the current version's object; after a restart the newest object by first-seen time is the current version. The **Postgres** store does the same through the procedures `save_snapshot` (replaces the newest row in place when the id is the same) and `sweep_snapshots`; it needs the database release that carries them.
+
 The store backend is derived from configuration:
 
 | Backend | Selected by | Use |
@@ -278,7 +283,7 @@ connection string `TRUST_STORE_DSN` can each be given as a file instead: set `<N
 value (written by a secrets agent). The file is read when the plain setting is not set, and surrounding whitespace is
 trimmed.
 
-The **Postgres** backend never touches tables directly. It reaches a dedicated `trust_anchor` schema **only** through four `SECURITY DEFINER` procedures — `trust_anchor.save_snapshot`, `load_latest_snapshot`, `save_bootstrap`, `load_latest_bootstrap` — each with the uniform signature `(pi_data jsonb, INOUT po_data jsonb)`: the marshalled snapshot or bootstrap goes in as `pi_data` and is stored verbatim (key columns are projected from it), and a structured success-or-error envelope comes back. The service connects as an **`EXECUTE`-only role** (`trust_anchor_public`) that holds no table privileges, so a bug or injection cannot read or write rows outside the procedure contract. A procedure that fails after a write re-raises a structured error to force a rollback, which the store decodes back into the same typed error shape as the validation path. The service does **not** create the schema: the reference implementation ships in this repository under [`migrations/`](migrations/) — Flyway migrations for the two versioned tables, the four procedures, the role grants, and the small `util` schema they use for the result envelope — and can be applied as-is or ported to your own migration tooling; [`migrations/README.md`](migrations/README.md) gives the two commands, roles first. The DSN carries a password, so it is sourced from a mounted secret (see `TRUST_STORE_DSN_FILE` below), never an inline literal.
+The **Postgres** backend never touches tables directly. It reaches a dedicated `trust_anchor` schema **only** through five `SECURITY DEFINER` procedures — `trust_anchor.save_snapshot`, `load_latest_snapshot`, `sweep_snapshots`, `save_bootstrap`, `load_latest_bootstrap` — each with the uniform signature `(pi_data jsonb, INOUT po_data jsonb)`: the marshalled snapshot or bootstrap goes in as `pi_data` and is stored verbatim (key columns are projected from it), and a structured success-or-error envelope comes back. The service connects as an **`EXECUTE`-only role** (`trust_anchor_public`) that holds no table privileges, so a bug or injection cannot read or write rows outside the procedure contract. A procedure that fails after a write re-raises a structured error to force a rollback, which the store decodes back into the same typed error shape as the validation path. The service does **not** create the schema: the reference implementation ships in this repository under [`migrations/`](migrations/) — Flyway migrations for the two versioned tables, the four procedures, the role grants, and the small `util` schema they use for the result envelope — and can be applied as-is or ported to your own migration tooling; [`migrations/README.md`](migrations/README.md) gives the two commands, roles first. The DSN carries a password, so it is sourced from a mounted secret (see `TRUST_STORE_DSN_FILE` below), never an inline literal.
 
 trust-anchor keeps **no cache layer of its own** (no Redis/Valkey) — caching is the consumer's responsibility. Its contribution to that model is the stable `ETag` (= snapshot id) that lets every consumer poll cheaply and refresh only on real change.
 
@@ -357,7 +362,9 @@ Server, logging, metrics and tracing settings are the framework's base configura
 | `TRUST_TERRITORIES` | `EU` | National lists to ingest: comma-separated territory codes, plus the group `EU` — which expands, per cycle, to every territory the **verified LOTL** publishes an XML pointer for (the member states — Greece under its publisher code `EL` — plus the EEA countries and UK today; membership changes flow in on the LOTL's own clock). Explicit codes combine with the group and de-duplicate (`EU,LV` = `EU`). A code the LOTL has no pointer for (e.g. `UA`) is served as a named `failed` territory entry, not dropped — configured intent is never silently narrowed. The default is the whole `EU` group; list explicit codes to narrow |
 | `TRUST_ALLOW_HTTP_TERRITORIES` | *(empty)* | Territories whose trusted list may be fetched over its published plain-http pointer (e.g. `SK`). Default empty = https required. Integrity comes from the XMLDSig verification against the LOTL-pinned signers, never from transport; this waives only the defense-in-depth https rule, per named territory, with a loud log line per cycle. Never applies to the LOTL itself |
 | `TRUST_ACCEPTED_STATUSES` | `granted` | Accepted service statuses (short names or full TS 119 612 URIs) |
-| `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence; the earliest TL `NextUpdate` is honoured too |
+| `TRUST_REFRESH_INTERVAL` | `6h` | Refresh cadence. A `NextUpdate` still ahead is honoured too: the service wakes at the nearest one when it is sooner than the interval, never sooner than one minute from now |
+| `TRUST_OVERDUE_RETRY_INTERVAL` | `1h` | How long to wait before asking again for a list whose `NextUpdate` is already **past** (the list of the lists' or any national list's). Never longer than `TRUST_REFRESH_INTERVAL`; at least `1m`, or the service refuses to start. A date already past does not shorten the wait to the one-minute floor, so a publisher that is late is asked about once per this interval. A nearer `NextUpdate` still ahead of another list wins when it is sooner. A `POST /v1/refresh` runs its cycle in the request, and the service then counts its wait again from the snapshot that cycle left, without running another cycle |
+| `TRUST_SNAPSHOT_RETENTION` | `2160h` (90 days) | How long a stored version is kept after a newer version replaced it, then swept at the end of every completed cycle. At least `24h`, or the service refuses to start; there is no off value. The latest version is never removed |
 | `TRUST_ACTIVATION_MODE` | `auto` | `auto` \| `hold` (additions held for operator approval) |
 | `TRUST_HOLD_AUTO_RELEASE` | `72h` | Hold-mode auto-release window |
 | `TRUST_STALE_GRACE` | `24h` | Grace past `NextUpdate` before data is flagged stale |
@@ -409,6 +416,7 @@ taxonomy).
 | `trust.pending_approved` | warning | A held addition was approved (via API or auto-release) |
 | `trust.refresh_failure` | warning | A cycle (or a persistence step) failed; the last good snapshot is still served |
 | `trust.stale` | warning | Served data is past `NextUpdate` + grace |
+| `trust.snapshots_swept` | info | The sweep removed stored versions; carries `removed` (how many) and `replaced_before` (the cutoff, RFC 3339: every version a newer one replaced before it). Not raised when it removed none |
 | `trust.internal_source_error` | warning | `INTERNAL_TRUST_SOURCE` failed to load/validate; the previous internal set is carried over |
 | `egress.violation` | high | A TL pointer was non-https or outside the allow-list; the territory keeps serving last good data |
 | `authz.denied` | warning | A `/v1` request lacked the required `trust:<level>` scope |
@@ -450,7 +458,7 @@ Alert on these — each one means trust decisions are being made on data you wou
 | `trust.stale` | Anchors are being served past the publisher's own `NextUpdate` plus grace. The data is not wrong yet; it is no longer vouched for. | Check upstream reachability and the last successful refresh. A stale that persists past one refresh interval is an outage of the source, not a blip. |
 | `egress.violation` | A trusted-list pointer was non-HTTPS or outside the configured allow-list. Either the upstream list changed shape, or something is redirecting it. | Treat as potentially hostile until explained. The affected territory keeps serving its last good data, so there is time to look. |
 | `trust.internal_source_error` | The operator declaration file failed to load or validate, and **the previous set is being served instead**. The edit that was just deployed is not live. | Read the diagnostic, which names the offending entry. Until it is fixed, what is served is the state before the edit — which looks identical to a successful edit from the outside. |
-| `trust.refresh_failure` | A cycle failed; the last good snapshot is still served. | One is normal on a flaky network. A run of them means refreshes have silently stopped and staleness is next. |
+| `trust.refresh_failure` | A cycle failed (`stage` `cycle`), or a snapshot could not be stored (`persist`) or the stored-version sweep failed (`sweep`); the last good snapshot is still served. | One is normal on a flaky network. A run of them means refreshes have silently stopped and staleness is next. |
 | `trust_services_skipped{territory,reason}` > 0 (metric) | A healthy territory is serving **fewer anchors than its list declares**: a certificate authority the member state trusts is missing from the bundle, and a certificate chaining to it will fail validation here while the territory reports healthy. | Read the named entries on `GET /v1/snapshot` (`skipped`) or the `skipped_services` field of the inventory line. A *change* in the count is the signal to alert on. `invalid-certificate` on a granted service is worth reporting to the publisher. (An anchor missing from *your* bundle because its key is unsupported is not a skip — it is held; see `heldCount` and the `keys` filter.) |
 
 Review, do not alert:
@@ -516,7 +524,7 @@ trust-anchor/
 │   ├── bootstrap.go             — pinned signer manifest / PEM loading
 │   └── internal.go              — operator-declared EUDI anchors (fail-closed)
 ├── store/                       — s3 / fs / memory / postgres snapshot stores
-├── tasks/refresh.go             — refresh loop (interval · NextUpdate · admin kick)
+├── tasks/refresh.go             — refresh loop (interval · NextUpdate · overdue wait)
 ├── events/                      — security-event emission
 ├── trust-config/                — pinned lotl-signers.yaml + generator + provenance
 ├── examples/internal-trust.yaml — worked internal-trust-source example

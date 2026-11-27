@@ -367,6 +367,21 @@ func (s *Snapshot) EarliestNextUpdate() time.Time {
 	return earliest
 }
 
+// NextUpdates returns every next-update date the snapshot knows: the list of
+// the lists' and each territory's (none for a list that publishes no date).
+func (s *Snapshot) NextUpdates() []time.Time {
+	var out []time.Time
+	if s.LOTLNextUpdate != nil && !s.LOTLNextUpdate.IsZero() {
+		out = append(out, *s.LOTLNextUpdate)
+	}
+	for _, t := range s.Territories {
+		if t.NextUpdate != nil && !t.NextUpdate.IsZero() {
+			out = append(out, *t.NextUpdate)
+		}
+	}
+	return out
+}
+
 // idContent is the deterministic projection of a snapshot that defines its
 // content hash: everything that can change what consumers receive. Timestamps
 // of generation and stale flags (serve-time derived) are excluded so an

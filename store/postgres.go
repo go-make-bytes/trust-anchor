@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -86,12 +87,34 @@ func (p *Postgres) call(ctx context.Context, proc string, in any) (json.RawMessa
 	return env.Data, nil
 }
 
-// SaveSnapshot appends snap as a new version (trust_anchor.save_snapshot). The
-// marshalled snapshot is the procedure input and is stored verbatim.
+// SaveSnapshot stores snap (trust_anchor.save_snapshot): the procedure replaces
+// the newest stored version in place when the content id is the same and adds a
+// version otherwise. The marshalled snapshot is the procedure input and is
+// stored verbatim.
 func (p *Postgres) SaveSnapshot(ctx context.Context, snap *trust.Snapshot) error {
 	_, err := p.call(ctx, "trust_anchor.save_snapshot", snap)
 
 	return err
+}
+
+// SweepSnapshots removes the versions a newer version replaced before the
+// given time (trust_anchor.sweep_snapshots); the newest is never removed.
+func (p *Postgres) SweepSnapshots(ctx context.Context, before time.Time) (int, error) {
+	data, err := p.call(ctx, "trust_anchor.sweep_snapshots", struct {
+		Before string `json:"before"`
+	}{Before: before.UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return 0, err
+	}
+
+	var res struct {
+		Removed int `json:"removed"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		return 0, fmt.Errorf("store: sweep snapshots: decode: %w", err)
+	}
+
+	return res.Removed, nil
 }
 
 // LoadLatestSnapshot returns the newest snapshot, or (nil, nil) when none.

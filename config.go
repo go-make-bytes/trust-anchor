@@ -40,6 +40,14 @@ const (
 	AuthModeInternal = "internal"
 )
 
+// Lower bounds of the two timing settings: the refresh task never wakes sooner
+// than a minute, and a stored version is kept at least a day after it was
+// replaced.
+const (
+	minOverdueRetryInterval = time.Minute
+	minSnapshotRetention    = 24 * time.Hour
+)
+
 // Snapshot store backends.
 const (
 	StoreBackendPostgres = "postgres"
@@ -100,9 +108,17 @@ type Configuration struct {
 	AcceptedStatusesRaw string `mapstructure:"trust_accepted_statuses" validate:"required"`
 
 	RefreshInterval time.Duration `mapstructure:"trust_refresh_interval" validate:"required,gt=0"`
-	ActivationMode  string        `mapstructure:"trust_activation_mode" validate:"required,oneof=auto hold"`
-	HoldAutoRelease time.Duration `mapstructure:"trust_hold_auto_release" validate:"gte=0"`
-	StaleGrace      time.Duration `mapstructure:"trust_stale_grace" validate:"gte=0"`
+	// OverdueRetryInterval is how long the service waits before asking again
+	// for a list whose next-update date is already past
+	// (TRUST_OVERDUE_RETRY_INTERVAL); never longer than RefreshInterval.
+	OverdueRetryInterval time.Duration `mapstructure:"trust_overdue_retry_interval"`
+	// SnapshotRetention is how long a stored version is kept after a newer
+	// version replaced it (TRUST_SNAPSHOT_RETENTION). The latest version is
+	// always kept; there is no way to switch the sweep off.
+	SnapshotRetention time.Duration `mapstructure:"trust_snapshot_retention"`
+	ActivationMode    string        `mapstructure:"trust_activation_mode" validate:"required,oneof=auto hold"`
+	HoldAutoRelease   time.Duration `mapstructure:"trust_hold_auto_release" validate:"gte=0"`
+	StaleGrace        time.Duration `mapstructure:"trust_stale_grace" validate:"gte=0"`
 
 	// AcceptedServiceTypesRaw is the comma-separated accepted trusted-list
 	// service-type identifiers (full registered Svctype URIs, or shorthand
@@ -170,6 +186,8 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	v.SetDefault("trust_accepted_statuses", "granted")
 	v.SetDefault("trust_service_types", "CA/QC")
 	v.SetDefault("trust_refresh_interval", 6*time.Hour)
+	v.SetDefault("trust_overdue_retry_interval", time.Hour)
+	v.SetDefault("trust_snapshot_retention", 90*24*time.Hour)
 	v.SetDefault("trust_activation_mode", "auto")
 	v.SetDefault("trust_hold_auto_release", 72*time.Hour)
 	v.SetDefault("trust_stale_grace", 24*time.Hour)
@@ -183,6 +201,8 @@ func (c *Configuration) Bind(_ string, v *viper.Viper) {
 	_ = v.BindEnv("trust_allow_http_territories", "TRUST_ALLOW_HTTP_TERRITORIES")
 	_ = v.BindEnv("trust_accepted_statuses", "TRUST_ACCEPTED_STATUSES")
 	_ = v.BindEnv("trust_refresh_interval", "TRUST_REFRESH_INTERVAL")
+	_ = v.BindEnv("trust_overdue_retry_interval", "TRUST_OVERDUE_RETRY_INTERVAL")
+	_ = v.BindEnv("trust_snapshot_retention", "TRUST_SNAPSHOT_RETENTION")
 	_ = v.BindEnv("trust_activation_mode", "TRUST_ACTIVATION_MODE")
 	_ = v.BindEnv("trust_hold_auto_release", "TRUST_HOLD_AUTO_RELEASE")
 	_ = v.BindEnv("trust_stale_grace", "TRUST_STALE_GRACE")
@@ -225,6 +245,12 @@ func (c *Configuration) Validate(valid *validation.Validate) error {
 	}
 	if err := valid.Struct(c); err != nil {
 		return err
+	}
+	if c.OverdueRetryInterval < minOverdueRetryInterval {
+		return fmt.Errorf("trust-anchor: config: TRUST_OVERDUE_RETRY_INTERVAL is %s, must be at least %s", c.OverdueRetryInterval, minOverdueRetryInterval)
+	}
+	if c.SnapshotRetention < minSnapshotRetention {
+		return fmt.Errorf("trust-anchor: config: TRUST_SNAPSHOT_RETENTION is %s, must be at least %s (the sweep has no off value)", c.SnapshotRetention, minSnapshotRetention)
 	}
 	if c.LegacyExtraAnchorsPath != "" {
 		return errExtraAnchorsRetired

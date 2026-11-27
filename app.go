@@ -121,6 +121,7 @@ func (a *App) init() error {
 		StaleGrace:           cfg.StaleGrace,
 	}, fetcher, a.events, a.Log())
 	a.manager = ingest.NewManager(pipeline, a.store, a.events, a.Log())
+	a.manager.SetRetention(cfg.SnapshotRetention)
 
 	switch cfg.AuthMode {
 	case AuthModeInternal:
@@ -133,7 +134,7 @@ func (a *App) init() error {
 		a.authMW = a.authClient.Authenticate()
 	}
 
-	if err := a.AddTask(tasks.NewRefreshTask(a.manager, cfg.RefreshInterval, a.Log())); err != nil {
+	if err := a.AddTask(tasks.NewRefreshTask(a.manager, cfg.RefreshInterval, cfg.OverdueRetryInterval, a.Log())); err != nil {
 		return err
 	}
 	return nil

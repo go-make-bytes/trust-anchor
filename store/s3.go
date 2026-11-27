@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -21,6 +23,7 @@ type S3 struct {
 	client *minio.Client
 	bucket string
 	prefix string
+	ver    *versions
 }
 
 // S3Options configures the S3 store.
@@ -47,7 +50,10 @@ func NewS3(opts S3Options) (*S3, error) {
 	if prefix != "" && prefix[len(prefix)-1] != '/' {
 		prefix += "/"
 	}
-	return &S3{client: client, bucket: opts.Bucket, prefix: prefix}, nil
+	s := &S3{client: client, bucket: opts.Bucket, prefix: prefix}
+	s.ver = newVersions(s)
+
+	return s, nil
 }
 
 func (s *S3) put(ctx context.Context, key string, v any) error {
@@ -80,11 +86,36 @@ func (s *S3) get(ctx context.Context, key string, v any) (bool, error) {
 	return true, json.Unmarshal(b, v)
 }
 
-func (s *S3) SaveSnapshot(ctx context.Context, snap *trust.Snapshot) error {
-	if err := s.put(ctx, snapshotKey(snap), snap); err != nil {
-		return err
+func (s *S3) list(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: s.prefix + prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("store: s3 list %s: %w", prefix, obj.Err)
+		}
+		keys = append(keys, strings.TrimPrefix(obj.Key, s.prefix))
 	}
-	return s.put(ctx, latestSnapshotKey, snap)
+
+	return keys, nil
+}
+
+func (s *S3) remove(ctx context.Context, key string) error {
+	if err := s.client.RemoveObject(ctx, s.bucket, s.prefix+key, minio.RemoveObjectOptions{}); err != nil {
+		return fmt.Errorf("store: s3 remove %s: %w", key, err)
+	}
+
+	return nil
+}
+
+// SaveSnapshot writes the version object (its key is stable for the version, so
+// a same-id save overwrites it) and then the latest pointer.
+func (s *S3) SaveSnapshot(ctx context.Context, snap *trust.Snapshot) error {
+	return s.ver.save(ctx, snap)
+}
+
+// SweepSnapshots removes the version objects a newer version replaced before
+// the given time.
+func (s *S3) SweepSnapshots(ctx context.Context, before time.Time) (int, error) {
+	return s.ver.sweep(ctx, before)
 }
 
 func (s *S3) LoadLatestSnapshot(ctx context.Context) (*trust.Snapshot, error) {
