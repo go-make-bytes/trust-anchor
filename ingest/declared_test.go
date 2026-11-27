@@ -49,7 +49,11 @@ func declaredPipeline(t *testing.T, ft *fixtureTransport, internalPath string, l
 		InternalTrustSource: internalPath,
 		StaleGrace:          24 * time.Hour,
 	}
-	return NewPipeline(cfg, fetcher, events.New(log), log)
+	p := NewPipeline(cfg, fetcher, events.New(log), log)
+	// Pinned like testPipeline: the recorded list of the lists is past its
+	// next-update on the wall clock, which would refuse every cycle.
+	p.clock = func() time.Time { return testClock }
+	return p
 }
 
 // deadTransport serves nothing: every fetch is a 404, and counts prove
@@ -240,6 +244,10 @@ func TestManagerReconcileDeclaredActivatesEditedFile(t *testing.T) {
 
 	if m.ReconcileDeclared(context.Background()) {
 		t.Fatal("second reconcile with an unchanged file reported a change")
+	}
+	// The edit is a new version; the reload with no edit stores nothing.
+	if got := st.SnapshotVersions(); got != 2 {
+		t.Fatalf("%d stored versions after an edit and a reload, want 2", got)
 	}
 }
 

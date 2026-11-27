@@ -20,6 +20,7 @@ const (
 	EventPendingApproved = "trust.pending_approved"
 	EventRefreshFailure  = "trust.refresh_failure"
 	EventStale           = "trust.stale"
+	EventSnapshotsSwept  = "trust.snapshots_swept"
 	EventEgressViolation = "egress.violation" // platform-standard type
 	// EventInternalSourceError fires when INTERNAL_TRUST_SOURCE fails to
 	// load or validate — the previous internal anchor set is carried over
@@ -78,6 +79,17 @@ func (e *Emitter) Emit(ctx *azugo.Context, eventType string, sev secevents.Sever
 	if err := e.sec.EmitBackground(context.Background(), ev); err != nil {
 		e.log.Error("security event emission failed", zap.String("event_type", eventType), zap.Error(err))
 	}
+}
+
+// SnapshotsSwept records that the sweep removed stored snapshot versions: how
+// many, and the cutoff — every version a newer one had replaced before that
+// instant. Informational: it is the routine ageing of history, and the only
+// record that history was removed.
+func (e *Emitter) SnapshotsSwept(ctx *azugo.Context, removed int, before time.Time) {
+	e.Emit(ctx, EventSnapshotsSwept, secevents.SeverityInfo, broker.OutcomeSuccess, map[string]any{
+		"removed":         removed,
+		"replaced_before": before.UTC().Format(time.RFC3339),
+	})
 }
 
 // AnchorChange emits one trust.anchor_change event for a diff entry.

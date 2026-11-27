@@ -214,8 +214,11 @@ func TestRefreshSetsFreshnessAndVolumeGauges(t *testing.T) {
 		t.Fatalf("trust_sync_last_success_timestamp_seconds = %v (present=%v), want >= %d", ts, ok, before.Unix())
 	}
 	age, ok := metricValue(buf, "trust_snapshot_age_seconds")
-	if !ok || age < 0 || age > 300 {
-		t.Fatalf("trust_snapshot_age_seconds = %v (present=%v), want small non-negative", age, ok)
+	// The cycle runs on the pinned test clock, so the snapshot's age is the
+	// wall time since that pin.
+	wantAge := time.Since(testClock).Seconds()
+	if !ok || age < wantAge-300 || age > wantAge+300 {
+		t.Fatalf("trust_snapshot_age_seconds = %v (present=%v), want about %v", age, ok, wantAge)
 	}
 	got, ok := metricValue(buf, `trust_anchors_total{source="internal",territory="LV",type="pid_provider"}`)
 	if !ok || got != 1 {

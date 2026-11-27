@@ -3,6 +3,55 @@
 Notable changes to this service, newest first, per release. This file is written for whoever
 runs the service or integrates against it.
 
+## v0.8.0
+
+A late list no longer makes the service run a cycle every minute, and the store no longer grows a full copy of the
+snapshot on every health change. **The PostgreSQL store needs the database release that carries the new
+`trust_anchor` procedures** (`save_snapshot` replacing in place, and the new `sweep_snapshots`); apply it before
+this version starts. The file, S3 and memory stores need nothing applied.
+
+### Changed
+
+- **A list that is already past its next-update date is asked for once an hour, not every minute.** Before, a date
+  already in the past counted as due at every wake, so one late publisher made the service run a full cycle every
+  minute for as long as it stayed late. Now a past date is asked for again after the new
+  `TRUST_OVERDUE_RETRY_INTERVAL` (default `1h`, never longer than `TRUST_REFRESH_INTERVAL`). A date still ahead
+  behaves as before: the service wakes at the nearest one when it is sooner than the regular interval, never sooner
+  than a minute. When one list is late and another is due in ten minutes, the service wakes in ten minutes. An
+  admin refresh (`POST /v1/refresh`) still runs its cycle at once, in the request, and the service then counts its
+  wait again from the snapshot that cycle left (before, it kept sleeping out a wait counted from the earlier
+  snapshot), without running another cycle.
+- **The store keeps one stored version per content id.** A refresh that produces the same id as the latest stored
+  version now replaces that version in place instead of adding another one; a different id is a new version. Before,
+  every change of a territory's health (a national server failing or recovering) stored the whole snapshot again as
+  a new version under the same id, and nothing ever removed one. What a cycle reports (`changed`, the log line, the
+  security events) is unchanged. The file and S3 stores keep one object per version, named by the time the version
+  was first seen, and overwrite it on a same-id refresh; objects an earlier release wrote stay and age out by the
+  rule below.
+- **A cycle now stores whatever a restart would restore differently.** In addition to what it stored before, it stores
+  a territory's next-update, issue time or source digest moving on its own, and the list of the lists' next-update or
+  issue time moving on its own (reported as no change to what is served, as for the list's digest). A save that
+  failed is now owed: the next cycle saves again even when nothing moved, until a save succeeds. A cycle that moved
+  nothing still does not call the store.
+
+### Added
+
+- **A sweep of stored versions.** At the end of every completed refresh cycle the service removes the versions that
+  a newer version replaced more than `TRUST_SNAPSHOT_RETENTION` ago (default `2160h`, 90 days; at least `24h`, there
+  is no off value). The latest version is never removed. A failed sweep does not fail the cycle or change what is
+  served: it is logged at error level and raised as a `trust.refresh_failure` event with the stage `sweep`. When a
+  sweep removes versions it raises a new informational event, `trust.snapshots_swept`, carrying the number removed
+  and the cutoff; it raises nothing when it removed none.
+- **Saving and sweeping are bounded to one minute per store call.** A store that stops answering fails that step
+  like any other failure (the `persist` or `sweep` refresh-failure event, an error log line, and the save owed to
+  the next cycle) instead of hanging the refresh loop.
+- **Stored versions are told apart by the full content id.** New file and S3 version objects carry the full id in
+  their key, so two ids that share their first 16 characters can no longer be taken for one version. Objects written
+  by earlier releases (16 characters) are still read and still replaced by a refresh of the same id. The sweep never
+  removes the object of the current version.
+- **`TRUST_OVERDUE_RETRY_INTERVAL` and `TRUST_SNAPSHOT_RETENTION`.** Either, set to `0`, a negative value, or below
+  its minimum (`1m` and `24h`), stops the start and names the setting.
+
 ## v0.7.1
 
 ### Changed

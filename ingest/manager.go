@@ -40,8 +40,38 @@ type Manager struct {
 	events   *events.Emitter
 	log      *zap.Logger
 
-	// kick wakes the refresh task for an immediate cycle (admin /v1/refresh).
+	// kick wakes the refresh task for an immediate cycle (TriggerRefresh).
 	kick chan struct{}
+	// refreshed is signalled at the end of every Refresh call (see Refreshed).
+	refreshed chan struct{}
+
+	// retention is how long a stored version is kept after a newer version
+	// replaced it; the end of every completed cycle sweeps with it.
+	retention time.Duration
+	// storeTimeout bounds every store call the manager makes while it holds
+	// its lock, so a store that stops answering cannot hang the refresh loop.
+	storeTimeout time.Duration
+	// persistOwed is set when a save failed and nothing has been saved
+	// since: the next cycle saves even if nothing moved. Guarded by mu.
+	persistOwed bool
+	// now is the clock the sweep's cutoff is read from.
+	now func() time.Time
+}
+
+// storeCallTimeout is the longest one snapshot save or sweep may take; a call
+// that runs out of time is a failure like any other.
+const storeCallTimeout = time.Minute
+
+// DefaultSnapshotRetention is how long a replaced stored version is kept
+// unless SetRetention says otherwise: 90 days.
+const DefaultSnapshotRetention = 90 * 24 * time.Hour
+
+// SetRetention sets how long a stored version is kept after a newer version
+// replaced it (TRUST_SNAPSHOT_RETENTION).
+func (m *Manager) SetRetention(d time.Duration) {
+	m.mu.Lock()
+	m.retention = d
+	m.mu.Unlock()
 }
 
 // NewManager builds a Manager and points the freshness gauges at it.
@@ -52,6 +82,12 @@ func NewManager(pipeline Refresher, st store.Store, ev *events.Emitter, log *zap
 		events:   ev,
 		log:      log,
 		kick:     make(chan struct{}, 1),
+
+		refreshed: make(chan struct{}, 1),
+
+		retention:    DefaultSnapshotRetention,
+		storeTimeout: storeCallTimeout,
+		now:          time.Now,
 	}
 	registerAgeGauge()
 	activeSnapshotFn.Store((func() *trust.Snapshot)(m.Active))
@@ -127,6 +163,19 @@ func (m *Manager) TriggerRefresh() {
 // Kick exposes the refresh trigger channel to the refresh task.
 func (m *Manager) Kick() <-chan struct{} { return m.kick }
 
+// Refreshed exposes a signal sent at the end of every Refresh call, completed
+// or failed, whoever made it: the admin route runs its cycle in the request
+// by calling Refresh directly, and the refresh task uses the signal to count
+// its wait again from the snapshot now served. The signal coalesces (one slot).
+func (m *Manager) Refreshed() <-chan struct{} { return m.refreshed }
+
+func (m *Manager) signalRefreshed() {
+	select {
+	case m.refreshed <- struct{}{}:
+	default:
+	}
+}
+
 // SetRefresher swaps the ingestion implementation. Test use only.
 func (m *Manager) SetRefresher(r Refresher) {
 	m.mu.Lock()
@@ -173,12 +222,9 @@ func (m *Manager) reconcileDeclared(ctx context.Context, prev *trust.Snapshot) (
 	if !changed {
 		return prev, false, rep
 	}
-	if err := m.store.SaveSnapshot(ctx, next); err != nil {
-		// Serving fresh declared data beats failing the reconcile; the next
-		// cycle retries persistence.
-		m.events.RefreshFailure(nil, "persist", err.Error())
-		m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
-	}
+	// Serving fresh declared data beats failing the reconcile; a failed save
+	// is owed and the next cycle saves again.
+	m.persist(ctx, next)
 	m.activate(next)
 	if !next.Diff.Empty() {
 		for _, e := range next.Diff.Entries {
@@ -212,6 +258,10 @@ func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 	// Detach: ctx may be (derived from) a pooled request context, and
 	// persistence must not be cancelled halfway by a disconnecting client.
 	ctx = context.WithoutCancel(ctx)
+
+	// Registered first so it runs last, after the lock is released: whoever
+	// waits on Refreshed sees the snapshot this call leaves behind.
+	defer m.signalRefreshed()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -251,17 +301,15 @@ func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 		!pendingEqual(prev.Pending, next.Pending) ||
 		territoryStateChanged(prev, next)
 
-	// Persist on a served change — and also when only the inputs the next
-	// cycle's download skip rests on moved (lotlInputChanged): those must
-	// reach the store to survive a restart, without being reported as a
-	// change to what is served.
-	if cycleChanged || lotlInputChanged(prev, next) {
-		if err := m.store.SaveSnapshot(ctx, next); err != nil {
-			// Serving fresh verified data beats failing the cycle; the next
-			// cycle retries persistence.
-			m.events.RefreshFailure(nil, "persist", err.Error())
-			m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
-		}
+	// Persist whatever a restart would restore differently: a served change,
+	// the inputs the next cycle's download skip rests on, the dates and
+	// digests of the lists (restoreStateMoved) — those reach the store without
+	// being reported as a change to what is served — and a save that failed
+	// before, which stays owed until one succeeds. A cycle that moved nothing
+	// does not call the store. Serving fresh verified data beats failing the
+	// cycle: a failed save is raised and the next cycle tries again.
+	if m.persistOwed || cycleChanged || lotlInputChanged(prev, next) || restoreStateMoved(prev, next) {
+		m.persist(ctx, next)
 	}
 	m.activate(next)
 	setLastSyncSuccess(time.Now().UTC())
@@ -289,7 +337,49 @@ func (m *Manager) Refresh(ctx context.Context) RefreshOutcome {
 		zap.Bool("changed", out.Changed),
 		logUint("lotl_sequence", next.LOTLSequence),
 		logInt("pending", len(next.Pending)))
+
+	m.sweep(ctx)
 	return out
+}
+
+// persist saves snap. A failure is raised as a refresh-failure event and
+// logged, and the save is owed: the next cycle saves again even when nothing
+// moved, until a save succeeds. The caller holds m.mu.
+func (m *Manager) persist(ctx context.Context, snap *trust.Snapshot) {
+	// Bounded: the lock is held, so a store that stops answering must not
+	// hang the refresh loop; running out of time is a failure like any other.
+	sctx, cancel := context.WithTimeout(ctx, m.storeTimeout)
+	defer cancel()
+	if err := m.store.SaveSnapshot(sctx, snap); err != nil {
+		m.persistOwed = true
+		m.events.RefreshFailure(nil, "persist", err.Error())
+		m.log.Error("snapshot persistence failed — serving from memory", zap.Error(err))
+		return
+	}
+	m.persistOwed = false
+}
+
+// sweep removes the stored versions that a newer version replaced longer ago
+// than the retention. It runs at the end of every completed cycle, saved or
+// not, because versions age without saves. A failure never fails the cycle and
+// never changes what is served: it is logged and raised as a refresh failure of
+// its own stage. The caller holds m.mu.
+func (m *Manager) sweep(ctx context.Context) {
+	before := m.now().UTC().Add(-m.retention)
+	sctx, cancel := context.WithTimeout(ctx, m.storeTimeout)
+	defer cancel()
+	removed, err := m.store.SweepSnapshots(sctx, before)
+	if err != nil {
+		m.events.RefreshFailure(nil, "sweep", err.Error())
+		m.log.Error("stored-version sweep failed — what is served is unchanged", zap.Error(err))
+		return
+	}
+	if removed > 0 {
+		// A removal of stored history leaves a record.
+		m.events.SnapshotsSwept(nil, removed, before)
+		m.log.Info("stored versions swept",
+			zap.Int("removed", removed), zap.Time("replaced_before", before))
+	}
 }
 
 // ApprovePending approves a held addition by certificate fingerprint: the
@@ -345,9 +435,12 @@ func (m *Manager) ApprovePending(ctx *azugo.Context, fingerprint, actor string) 
 	next.PrevID = cur.ID
 	next.Diff = trust.ComputeDiff(cur, next)
 
-	if err := m.store.SaveSnapshot(detach(ctx), next); err != nil {
+	sctx, cancel := context.WithTimeout(detach(ctx), m.storeTimeout)
+	defer cancel()
+	if err := m.store.SaveSnapshot(sctx, next); err != nil {
 		return nil, fmt.Errorf("ingest: persist approved snapshot: %w", err)
 	}
+	m.persistOwed = false
 	m.activate(next)
 
 	m.events.PendingApproved(ctx, fingerprint, actor, "api")
@@ -419,6 +512,39 @@ func territoryStateChanged(prev, next *trust.Snapshot) bool {
 // nil here: a first cycle persists on cycleChanged before this is consulted.
 func lotlInputChanged(prev, next *trust.Snapshot) bool {
 	return prev.LOTLDigest != next.LOTLDigest
+}
+
+// restoreStateMoved reports whether anything a restart restores — beyond what
+// the id, the health check and the list-of-the-lists digest already cover —
+// differs between two snapshots: a territory's next-update, issue time or
+// source digest, a territory that is gone, and the list of the lists' own
+// next-update or issue time. None of these is trust content or a served
+// change, so none moves the id or the reported "changed"; without storing
+// them a restart would bring back dates and digests weeks old. The free-text
+// failure reasons are left out on purpose: their text differs on every failure.
+func restoreStateMoved(prev, next *trust.Snapshot) bool {
+	if !sameInstant(prev.LOTLNextUpdate, next.LOTLNextUpdate) || !prev.LOTLIssueTime.Equal(next.LOTLIssueTime) {
+		return true
+	}
+	if len(prev.Territories) != len(next.Territories) {
+		return true
+	}
+	for _, t := range next.Territories {
+		pt := prev.Territory(t.Code)
+		if pt == nil || !sameInstant(pt.NextUpdate, t.NextUpdate) || !pt.IssueTime.Equal(t.IssueTime) ||
+			pt.SourceDigest != t.SourceDigest {
+			return true
+		}
+	}
+	return false
+}
+
+// sameInstant compares two optional times by the instant they name.
+func sameInstant(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
 }
 
 // skippedEqual compares two skipped-service sets by identity (fingerprint,

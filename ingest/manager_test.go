@@ -165,6 +165,9 @@ func TestManagerApprovePending(t *testing.T) {
 	if out := m.Refresh(context.Background()); out.CycleErr != nil {
 		t.Fatal(out.CycleErr)
 	}
+	if got := st.SnapshotVersions(); got != 1 {
+		t.Fatalf("%d stored versions before the approval, want 1", got)
+	}
 
 	if _, err := m.ApprovePending(nil, "nope", "ops"); err == nil {
 		t.Fatal("approving unknown fingerprint succeeded")
@@ -191,6 +194,9 @@ func TestManagerApprovePending(t *testing.T) {
 	}
 	if m.Active().ID != next.ID {
 		t.Fatal("approved snapshot not active")
+	}
+	if got := st.SnapshotVersions(); got != 2 {
+		t.Fatalf("%d stored versions after the approval, want 2 (a new id is a new version)", got)
 	}
 }
 
@@ -229,6 +235,13 @@ func TestManagerAdoptsTerritoryHealthFlip(t *testing.T) {
 	de := m.Active().Territory("DE")
 	if de == nil || !de.Failed || de.FailureReason == "" {
 		t.Fatalf("failed territory not served: %+v", de)
+	}
+	// The flip is persisted into the same version, not a new one.
+	if got := st.SnapshotVersions(); got != 1 {
+		t.Fatalf("%d stored versions after a health flip, want 1", got)
+	}
+	if stored, err := st.LoadLatestSnapshot(context.Background()); err != nil || stored == nil || stored.Territory("DE") == nil {
+		t.Fatalf("the flip did not reach the store: %+v %v", stored, err)
 	}
 
 	buf := gatherMetrics()
@@ -372,5 +385,8 @@ func TestManagerPersistsWhenLOTLInputsChange(t *testing.T) {
 	}
 	if stored == nil || stored.LOTLDigest != "abc" || len(stored.LOTLPointers) != 1 {
 		t.Fatalf("the skip inputs did not reach the store: %+v", stored)
+	}
+	if got := st.SnapshotVersions(); got != 1 {
+		t.Fatalf("%d stored versions after the inputs moved, want 1", got)
 	}
 }
